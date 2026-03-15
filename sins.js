@@ -487,7 +487,7 @@ class SinDetector {
 
   // ── Generate Callout Message ──
 
-  async generateCallout(username, sinResult, channel = 'text') {
+  async generateCallout(username, sinResult, channel = 'text', systemPromptOverride = null) {
     const userId = null; // We get userId from the caller
     const style = pickCalloutStyle();
     const totals = this.getTotalSinsForUsername(username);
@@ -512,7 +512,8 @@ Sin severity: ${sinResult.type.toUpperCase()}.${escalation}${titleNote}${rivalNo
 Call them out IN CHARACTER as Jenkins. ${lengthNote} Be dramatic and funny, not mean-spirited. Reference their specific words. If venial, be more playful. If mortal, be more serious. If unforgivable, be absolutely devastating.`;
 
     try {
-      const response = await chat(this.deepseek, this.systemPrompt, prompt);
+      const activePrompt = systemPromptOverride || this.systemPrompt;
+      const response = await chat(this.deepseek, activePrompt, prompt);
       return response;
     } catch (e) {
       console.error('[Sins] Callout generation error:', e.message);

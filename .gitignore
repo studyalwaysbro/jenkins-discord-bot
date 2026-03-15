@@ -26,5 +26,9 @@ Thumbs.db
 .DS_Store
 desktop.ini
 
+# Temp API response files
+el_sub.json
+el_voices.json
+
 # Debug
 npm-debug.log*

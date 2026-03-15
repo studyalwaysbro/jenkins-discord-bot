@@ -65,21 +65,66 @@ async function textToSpeech(apiKey, text, voiceId) {
 }
 
 /**
+ * Convert text to speech with a specific voice configuration (from alter ego system).
+ * voiceConfig: { type: 'elevenlabs', voiceId } | { type: 'edge', msVoice, rate, pitch }
+ * Returns { buffer: Buffer, usedFallback: boolean }
+ */
+async function textToSpeechWithVoice(apiKey, text, voiceConfig) {
+  if (!voiceConfig) return textToSpeech(apiKey, text);
+
+  if (voiceConfig.type === 'edge') {
+    // Edge TTS — FREE, used for alter ego voices
+    const buffer = await edgeTTS(
+      text,
+      voiceConfig.msVoice || 'en-US-GuyNeural',
+      voiceConfig.rate || '-5%',
+      voiceConfig.pitch || '-15Hz'
+    );
+    return { buffer, usedFallback: false }; // Not a "fallback" — intentional Edge usage
+  }
+
+  // ElevenLabs — premium, used for Jenkins Prime
+  if (quotaExhausted) {
+    // If quota is gone, fall back to Edge TTS even for ElevenLabs voices
+    const buffer = await edgeTTS(text);
+    return { buffer, usedFallback: true };
+  }
+
+  try {
+    const buffer = await elevenLabsTTS(apiKey, text, voiceConfig.voiceId, voiceConfig.settings);
+    ttsCallCount++;
+    return { buffer, usedFallback: false };
+  } catch (err) {
+    if (err.message.includes('quota_exceeded') || err.message.includes('401')) {
+      console.error('[ElevenLabs] QUOTA EXHAUSTED — switching to Edge TTS fallback');
+      quotaExhausted = true;
+      ttsFallbackActive = true;
+      lastQuotaError = Date.now();
+      const buffer = await edgeTTS(text);
+      return { buffer, usedFallback: true };
+    }
+    throw err;
+  }
+}
+
+/**
  * ElevenLabs TTS — the custom Jenkins voice
  */
-function elevenLabsTTS(apiKey, text, voiceId) {
+function elevenLabsTTS(apiKey, text, voiceId, settings) {
   voiceId = voiceId || DEFAULT_VOICE_ID;
+
+  const voiceSettings = settings || {
+    stability: 0.4,
+    similarity_boost: 0.8,
+    style: 0.6,
+    use_speaker_boost: true,
+  };
 
   const url = `${ELEVENLABS_BASE}/text-to-speech/${voiceId}`;
   const body = JSON.stringify({
     text,
     model_id: 'eleven_multilingual_v2',
-    voice_settings: {
-      stability: 0.4,
-      similarity_boost: 0.8,
-      style: 0.6,
-      use_speaker_boost: true,
-    },
+    voice_settings: voiceSettings,
   });
 
   return new Promise((resolve, reject) => {
@@ -116,14 +161,17 @@ function elevenLabsTTS(apiKey, text, voiceId) {
 }
 
 /**
- * Edge TTS — free fallback voice (Microsoft Neural TTS)
- * Uses en-US-AndrewMultilingualNeural with lower pitch for dramatic effect
+ * Edge TTS — free Microsoft Neural TTS with configurable voice/rate/pitch.
+ * Used as fallback AND for alter ego voices (saves ElevenLabs credits).
  */
-async function edgeTTS(text) {
+async function edgeTTS(text, voice, rate, pitch) {
+  voice = voice || 'en-US-GuyNeural';
+  rate = rate || '-5%';
+  pitch = pitch || '-15Hz';
+
   // Dynamic import since edge-tts-universal is ESM
   const { Communicate } = await import('edge-tts-universal');
-  // Communicate(text, voice, rate, pitch, volume)
-  const comm = new Communicate(text, 'en-US-GuyNeural', '-5%', '-15Hz', '+0%');
+  const comm = new Communicate(text, voice, rate, pitch, '+0%');
   const buffers = [];
   for await (const chunk of comm.stream()) {
     if (chunk.type === 'audio' && chunk.data) buffers.push(chunk.data);
@@ -198,6 +246,7 @@ async function speechToText(apiKey, audioBuffer) {
 
 module.exports = {
   textToSpeech,
+  textToSpeechWithVoice,
   speechToText,
   edgeTTS,
   DEFAULT_VOICE_ID,
