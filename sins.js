@@ -495,7 +495,10 @@ class SinDetector {
     const sinTitle = this.getSinTitleForUsername(username);
     const titleNote = sinTitle ? ` Address them as "${sinTitle}".` : '';
     const isRival = this.rivalIds.has(this.getUserIdByName(username));
-    const rivalNote = isRival ? ' This is a designated Rival of the Lodge — one who has earned the Architect\'s special attention for their pattern of faithlessness. Be extra aggressive and pointed in your callout. Roast them hard but stay in character.' : '';
+    let privateLore = null;
+    try { privateLore = require('./private-lore'); } catch {}
+    const defaultRivalNote = ' This is a designated Rival of the Lodge — one who has earned the Architect\'s special attention for their pattern of faithlessness. Be extra aggressive and pointed in your callout. Roast them hard but stay in character.';
+    const rivalNote = isRival ? (privateLore?.rivalCalloutNote || defaultRivalNote) : '';
 
     const lengthNote = channel === 'voice'
       ? 'Keep it to 1 sentence MAX — you are speaking aloud.'
