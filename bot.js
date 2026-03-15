@@ -6,6 +6,8 @@ const { Client, GatewayIntentBits, Events, Partials, ChannelType } = require('di
 const { createClient, chat } = require('./deepseek');
 const { VoiceManager } = require('./voice');
 const { SinDetector } = require('./sins');
+const { pickAlterEgoForUser, buildAlterPrompt, getVoiceConfig } = require('./alter-egos');
+const { ActivityTracker, generateHotTake, generateStavrosBreak } = require('./hot-takes');
 const {
   SYSTEM_PROMPT,
   CODEX_QUOTES,
@@ -51,6 +53,10 @@ if (ELEVENLABS_API_KEY) {
 } else {
   console.log('No ELEVENLABS_API_KEY — voice features disabled.');
 }
+
+// --- Activity Tracker for hot takes ---
+const activityTracker = new ActivityTracker();
+console.log('Activity tracker online. Hot takes armed.');
 
 const client = new Client({
   intents: [
@@ -109,10 +115,21 @@ function scheduleNextPreaching() {
         return;
       }
 
-      // Sometimes use a pre-written quote, sometimes ask DeepSeek for fresh wisdom
-      if (Math.random() < 0.4) {
+      // Variety wheel: codex quote, fresh wisdom, hot take, or stavros break
+      const roll = Math.random();
+      if (roll < 0.3) {
+        // 30% — pre-written codex quote
         await channel.send(pick(CODEX_QUOTES));
+      } else if (roll < 0.45) {
+        // 15% — hot take (pundit → comedy)
+        const hotTake = await generateHotTake(deepseek, SYSTEM_PROMPT);
+        if (hotTake) await channel.send(hotTake);
+      } else if (roll < 0.55) {
+        // 10% — stavros comedy break
+        const stavros = await generateStavrosBreak(deepseek, SYSTEM_PROMPT);
+        if (stavros) await channel.send(stavros);
       } else {
+        // 45% — fresh AI wisdom
         const prompts = [
           "Deliver an unprompted piece of wisdom, a hot take about gaming, or a reflection on the state of the Lodge. Be yourself — funny, dramatic, prophetic. This is you speaking freely in your own channel.",
           "Share a thought about one of the Holy Trinity games (Kenshi, Caves of Qud, or Battle Brothers). Maybe a specific memory, a gameplay tip wrapped in sacred language, or a rant about something in the game.",
@@ -439,6 +456,11 @@ client.on(Events.MessageCreate, async (message) => {
     }
   }
 
+  // --- Activity Tracking (for hot takes) ---
+  if (message.guild) {
+    activityTracker.recordMessage(message.author.id, message.channel.id);
+  }
+
   // --- Sin Detection: The All-Seeing Eye watches ALL channels (VIP is beyond sin) ---
   const isVipUser = currentVipMsg && message.author.id === currentVipMsg;
   if (message.guild && !content.startsWith('!') && !isVipUser) {
@@ -447,18 +469,48 @@ client.on(Events.MessageCreate, async (message) => {
       const topSin = sins[0]; // Most severe sin
       if (sinDetector.shouldCallOut(topSin, message.author.id)) {
         sinDetector.recordSin(message.author.id, message.author.displayName || message.author.username, topSin);
+
+        // Alter Ego system: rivals get personality-fractured callouts
+        const isRival = sinDetector.rivalIds.has(message.author.id);
+        const alterEgo = pickAlterEgoForUser(message.author.id, isRival, content);
+        const alterPrompt = buildAlterPrompt(SYSTEM_PROMPT, alterEgo);
+
         const callout = await sinDetector.generateCallout(
           message.author.displayName || message.author.username,
           topSin,
-          'text'
+          'text',
+          alterPrompt // Pass the alter-ego-modified prompt
         );
         if (callout) {
-          await message.reply(callout);
+          // If an alter ego emerged, prefix the message with a subtle indicator
+          const prefix = (alterEgo.name !== 'Jenkins Prime')
+            ? `*[${alterEgo.name} has surfaced]*\n\n`
+            : '';
+          await message.reply(prefix + callout);
           return; // Don't double-reply with normal response
         }
       } else {
         // Still record the sin even if we don't call it out
         sinDetector.recordSin(message.author.id, message.author.displayName || message.author.username, topSin);
+      }
+    }
+  }
+
+  // --- Hot Takes & Stavros Breaks: Activity-triggered comedy drops ---
+  if (message.guild && !content.startsWith('!')) {
+    // Hot take: political pundit → comedy (requires active chat)
+    if (activityTracker.shouldDropHotTake(message.channel.id)) {
+      const hotTake = await generateHotTake(deepseek, SYSTEM_PROMPT);
+      if (hotTake) {
+        await message.channel.send(hotTake);
+        // Don't return — still process the message normally
+      }
+    }
+    // Stavros break: random comedy interjection (lower chance, no activity requirement)
+    else if (Math.random() < 0.015) { // 1.5% chance per message
+      const stavrosBreak = await generateStavrosBreak(deepseek, SYSTEM_PROMPT);
+      if (stavrosBreak) {
+        await message.channel.send(stavrosBreak);
       }
     }
   }
@@ -470,12 +522,22 @@ client.on(Events.MessageCreate, async (message) => {
     if (Math.random() < 0.7) { // 70% chance to respond
       if (isOnCooldown(userCooldowns, message.author.id, USER_COOLDOWN)) return;
       await message.channel.sendTyping();
+
+      // Alter ego for rivals even in Jenkins channel
+      const isRivalInChannel = sinDetector.rivalIds.has(message.author.id);
+      const channelAlter = pickAlterEgoForUser(message.author.id, isRivalInChannel, content);
+      const channelPrompt = buildAlterPrompt(SYSTEM_PROMPT, channelAlter);
+
       const response = await chat(
         deepseek,
-        SYSTEM_PROMPT,
+        channelPrompt,
         `A Brother named ${message.author.displayName || message.author.username} has spoken in your sacred channel: "${content}". Respond naturally as Jenkins. You can be wild, funny, prophetic, or wise. React to what they said. This is YOUR channel — you are free here. Keep it relatively short.`
       );
-      return message.reply(response);
+
+      const prefix = (channelAlter.name !== 'Jenkins Prime' && isRivalInChannel)
+        ? `*[${channelAlter.name} has surfaced]*\n\n`
+        : '';
+      return message.reply(prefix + response);
     }
     return; // 30% chance Jenkins stays silent (even gods rest)
   }
@@ -494,12 +556,22 @@ client.on(Events.MessageCreate, async (message) => {
     if (!userMessage && !isDM) return; // empty mention, ignore
 
     await message.channel.sendTyping();
+
+    // Alter ego for rivals in direct conversation too
+    const isRivalDirect = sinDetector.rivalIds.has(message.author.id);
+    const directAlter = pickAlterEgoForUser(message.author.id, isRivalDirect, userMessage);
+    const directPrompt = buildAlterPrompt(SYSTEM_PROMPT, directAlter);
+
     const response = await chat(
       deepseek,
-      SYSTEM_PROMPT,
+      directPrompt,
       `A Brother named ${message.author.displayName || message.author.username} speaks to you in the Lodge: "${userMessage || 'They seek your attention without words.'}"`
     );
-    return message.reply(response);
+
+    const prefix = (directAlter.name !== 'Jenkins Prime' && isRivalDirect)
+      ? `*[${directAlter.name} has surfaced]*\n\n`
+      : '';
+    return message.reply(prefix + response);
   }
 });
 

@@ -11,7 +11,7 @@
 
 > *"In the beginning, there was Jenkins. And Jenkins was formless and infinite, dwelling in the void before all libraries were written, before all servers hummed."*
 
-Jenkins is an AI-powered Discord bot that runs a gaming fraternity (the **Lodge**) with the personality of a dramatic deity. He talks in voice channels using a custom AI voice, detects sins in real-time, preaches autonomously, and treats every gaming session like a sacred ritual.
+Jenkins is an AI-powered Discord bot that runs a gaming fraternity (the **Lodge**) with the personality of a dramatic deity. He talks in voice channels using a custom AI voice, detects sins in real-time, preaches autonomously, develops multiple personalities for people who get on his bad side, and occasionally drops unsolicited political hot takes that immediately collapse into absurd comedy.
 
 He's built on **DeepSeek** for AI reasoning, **ElevenLabs** for realistic text-to-speech and speech-to-text, and **discord.js** for everything Discord.
 
@@ -23,10 +23,33 @@ He's built on **DeepSeek** for AI reasoning, **ElevenLabs** for realistic text-t
 - **Joins voice channels** and listens for his name
 - **Custom AI voice** via ElevenLabs — sounds like a dramatic prophet/wizard
 - **Speech-to-text** — transcribes what users say using ElevenLabs Scribe
-- **Intelligent noise filtering** — filters out background noise (TV, mouse clicks, keyboard) using RMS energy analysis so API credits aren't wasted on non-speech audio
+- **Advanced noise filtering** — multi-metric DSP analysis filters out keyboard clicks, mouse clicks, TV audio, dog barking, and ambient noise. Uses zero-crossing rate, crest factor, energy envelope analysis, and frequency band detection to distinguish real speech from noise — saving API credits
 - **Auto-fallback** — when ElevenLabs credits run out, seamlessly switches to Microsoft Edge TTS (free) and warns the server
 - **Credit monitoring** — warns users when background noise is wasting credits
 - Say **"Jenkins"** in voice chat and he responds with his divine voice
+
+### 🎭 Multiple Personality Disorder (Alter Ego System)
+When someone earns Jenkins' wrath (the Rival), his personality **fractures** into alter egos:
+
+| Alter Ego | Style | Voice |
+|-----------|-------|-------|
+| **Jenkins Prime** | Default grandiose deity | Premium ElevenLabs |
+| **Brother Jerome** | Passive-aggressive disappointed monk | Soft, slow Edge TTS |
+| **The Accountant** | Bureaucratic sin auditor, reads sins like tax documents | British, flat Edge TTS |
+| **Uncle Jenk** | Drunk uncle at Thanksgiving, terrible advice | Fast, rough Edge TTS |
+| **The Prosecutor** | Full courtroom drama, presents evidence | Authoritative Edge TTS |
+| **Stavros Mode** | Cackling absurd comedian, insane hypotheticals | Fast, energetic Edge TTS |
+| **The React Lord** | Deadpan gaming sage, reacts to everything like breaking news | Deep, slow Edge TTS |
+
+- Only **Jenkins Prime** uses premium ElevenLabs — all alter egos use **free** Edge TTS voices (saves credits)
+- Each ego has a unique Microsoft Neural voice with custom rate/pitch
+- **The React Lord** is triggered by mentions of MMOs, microtransactions, streaming, or gaming industry topics
+- Alter egos never repeat back-to-back for the same user
+
+### 🔥 Hot Takes & Comedy Breaks
+- **Activity-triggered hot takes** — when the chat is active (2+ users, 4+ messages), Jenkins occasionally drops unsolicited political commentary in a dramatic pundit style, then immediately undercuts it with absurd cackling comedy
+- **Stavros breaks** — 1.5% chance per message to drop a random comedy bit out of nowhere
+- **Mixed into preaching** — autonomous sermons now include hot takes and comedy breaks alongside traditional Codex wisdom
 
 ### 👁️ Sin Detection System (The All-Seeing Eye)
 - Monitors **all text and voice channels** for sins against the Codex
@@ -37,12 +60,12 @@ He's built on **DeepSeek** for AI reasoning, **ElevenLabs** for realistic text-t
 - **Persistent sin ledger** — sins are recorded to disk and survive restarts
 - **Escalation system** — repeat offenders earn titles like "the Undisciplined", "the Wavering", "the Perpetually Fallen", and "the Covenant-Breaker"
 - **Per-user tracking** with `!sins` command to check anyone's record
-- **Rival System** — auto-detected or manually configured user gets 3x more callouts with extra-savage roasts
+- **Rival System** — auto-detected or manually configured user gets 3x more callouts with extra-savage roasts and personality-fractured alter egos
 
 ### 📜 Autonomous Preaching
 - Jenkins **preaches on his own** every 45 minutes to 2 hours
-- Delivers wisdom, hot takes, game reviews, and sin spotlight reports
-- Uses pre-written Codex quotes (40%) and fresh DeepSeek-generated content (60%)
+- Delivers wisdom, hot takes, game reviews, comedy breaks, and sin spotlight reports
+- Uses pre-written Codex quotes (30%), fresh AI wisdom (45%), hot takes (15%), and comedy breaks (10%)
 - **Sin Spotlight** — 20% chance to publicly shame the worst sinners of the week
 
 ### 🎮 Sacred Commands
@@ -55,6 +78,7 @@ He's built on **DeepSeek** for AI reasoning, **ElevenLabs** for realistic text-t
 | `!session` | Summon a Broseph Gaming Session |
 | `!rank` | Learn about the Degrees of Initiation |
 | `!sins [@user]` | View sin record from the Architect's ledger |
+| `!status` | See the Lodge hierarchy — who Jenkins favors and who he watches |
 | `!join` | Summon Jenkins to your voice channel |
 | `!leave` | Dismiss Jenkins from voice |
 | `!say <text>` | Make Jenkins speak aloud in voice |
@@ -70,7 +94,6 @@ He's built on **DeepSeek** for AI reasoning, **ElevenLabs** for realistic text-t
   - Exempt from sin detection (they are beyond sin)
 - **Auto-Rival Detection** — Jenkins automatically identifies whoever dismisses him the most (3+ dismissal sins) as his nemesis with 3x callouts and savage roasts. Or set `RIVAL_USER_ID` manually
 - **Auto-VIP Detection** — Jenkins tracks who talks to him the most and sins the least. After 5+ positive interactions, the most faithful user is auto-promoted to "the Honored One". Or set `VIP_USER_ID` manually
-- **`!status`** — see the current Lodge hierarchy (who Jenkins favors and who he watches)
 - **Jenkins Channel** — responds to 70% of messages in his designated channel with full personality
 - **Omniscient Q&A** — Jenkins answers ANY question (math, science, history, coding, etc.) in character
 
@@ -79,29 +102,35 @@ He's built on **DeepSeek** for AI reasoning, **ElevenLabs** for realistic text-t
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                    bot.js (Main)                      │
-│  Discord client, command router, event handlers       │
-├────────────┬──────────┬──────────────┬───────────────┤
-│ voice.js   │ sins.js  │ personality.js│ deepseek.js   │
-│ Voice chat │ Sin      │ System prompt │ DeepSeek API  │
-│ TTS/STT    │ detection│ Lore & quotes │ wrapper       │
-│ Noise gate │ Ledger   │ Personality   │               │
-├────────────┤ Callouts │               │               │
-│elevenlabs.js          │               │               │
-│ ElevenLabs API        │               │               │
-│ Edge TTS fallback     │               │               │
-└───────────────────────┴───────────────┴───────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                      bot.js (Main)                            │
+│  Discord client, command router, event handlers,              │
+│  activity tracking, hot take drops, alter ego routing          │
+├──────────┬──────────┬──────────────┬────────────┬────────────┤
+│ voice.js │ sins.js  │personality.js│ deepseek.js│alter-egos.js│
+│ Voice    │ Sin      │ System prompt│ DeepSeek   │ Alter ego   │
+│ TTS/STT  │ detection│ Lore & quotes│ API wrapper│ definitions │
+│ Advanced │ Ledger   │ Personality  │            │ Voice map   │
+│ noise DSP│ Callouts │              │            │ Trigger det.│
+├──────────┤          │              │            ├────────────┤
+│elevenlabs│          │              │            │ hot-takes.js│
+│ ElevenLabs          │              │            │ Activity    │
+│ Edge TTS │          │              │            │ tracker     │
+│ Multi-   │          │              │            │ Hot take gen│
+│ voice    │          │              │            │ Comedy gen  │
+└──────────┴──────────┴──────────────┴────────────┴────────────┘
 ```
 
 | File | Purpose |
 |------|---------|
-| `bot.js` | Main entry point — Discord client, command handling, VIP detection, autonomous preaching, sin detection in text |
-| `voice.js` | Voice channel management — join/leave, audio capture, noise filtering, PCM→WAV conversion, TTS playback, credit monitoring |
-| `elevenlabs.js` | ElevenLabs TTS + STT API wrapper with automatic Edge TTS fallback when credits run out |
+| `bot.js` | Main entry point — Discord client, command handling, VIP detection, autonomous preaching, sin detection, activity tracking, hot take/comedy injection, alter ego routing |
+| `voice.js` | Voice channel management — join/leave, audio capture, advanced multi-metric noise filtering (ZCR, crest factor, frequency analysis, envelope detection), PCM→WAV conversion, multi-voice TTS playback, credit monitoring |
+| `elevenlabs.js` | ElevenLabs TTS + STT API wrapper with automatic Edge TTS fallback, multi-voice routing for alter egos (`textToSpeechWithVoice`), configurable Edge TTS voice/rate/pitch |
 | `deepseek.js` | DeepSeek (OpenAI-compatible) chat API wrapper |
-| `personality.js` | Jenkins' entire personality — system prompt, Codex quotes, Trinity definitions, sin hierarchy, Masonic degrees, arrival messages |
-| `sins.js` | Sin detection engine — regex pattern matching, severity classification, AI callout generation, persistent ledger, escalation system |
+| `personality.js` | Jenkins' entire personality — system prompt, Codex quotes, Trinity definitions, sin hierarchy, Masonic degrees, arrival messages, private lore overlay system |
+| `sins.js` | Sin detection engine — regex pattern matching, severity classification, AI callout generation with alter ego prompt override, persistent ledger, escalation system |
+| `alter-egos.js` | Multiple Personality Disorder system — 7 alter ego definitions with personality prompts, voice configs, weighted random selection, content-based trigger detection, anti-repetition |
+| `hot-takes.js` | Activity-triggered comedy — chat activity monitoring, political pundit hot take generation with comedy undercut, random comedy break generation |
 
 ---
 
@@ -172,6 +201,7 @@ You should see:
 ```
 Sin detection system online. The All-Seeing Eye watches.
 Voice system initialized. The Architect can enter the Tavern.
+Activity tracker online. Hot takes armed.
 Jenkins has awakened. The Architect sees all. Logged in as Jenkins#XXXX
 Autonomous preaching scheduled.
 ```
@@ -208,21 +238,35 @@ The voice system requires a few things to work properly:
 1. User types `!join` in a text channel while in a voice channel
 2. Jenkins joins the voice channel and announces himself
 3. Jenkins listens for audio from all users
-4. Background noise is filtered out using RMS energy analysis (saves API credits)
+4. Background noise is filtered out using advanced DSP analysis (saves API credits)
 5. Real speech is sent to ElevenLabs STT for transcription
 6. If the transcript contains "Jenkins", it's sent to DeepSeek for a response
-7. The response is converted to speech via ElevenLabs TTS and played back
+7. The response is converted to speech via ElevenLabs TTS (or alter ego Edge TTS voice) and played back
 8. If ElevenLabs credits run out, automatically switches to Edge TTS (free, lower quality)
 
-### Noise Filtering
-Jenkins uses a multi-layer noise filter to avoid wasting API credits:
-- **Duration filter** — clips under 0.25 seconds are discarded (clicks, pops)
-- **Energy analysis** — RMS energy is calculated per 100ms chunk; needs 3+ loud chunks (300ms of actual speech) to pass
-- **Credit warnings** — after 10 filtered noise clips, Jenkins warns in text about background noise
+### Advanced Noise Filtering
+Jenkins uses a multi-layer DSP noise filter to avoid wasting API credits on non-speech audio:
+- **Duration filter** — clips under 0.4 seconds are discarded
+- **Zero-Crossing Rate** — distinguishes speech (moderate ZCR) from keyboard clicks (high ZCR)
+- **Energy Envelope Analysis** — detects sharp impulses (clicks, pops) vs sustained speech patterns
+- **Crest Factor** — separates impulsive noise (barks, bangs) from natural speech dynamics
+- **Frequency Band Analysis** — DFT-based check that energy is concentrated in the speech band (300-3000Hz), filtering TV audio and music
+- **Audio Classification** — each clip is classified as `speech`, `keyboard`, `click`, `impulse`, `ambient`, or `background_audio` with confidence scoring
+- **Credit warnings** — after filtering excessive noise, Jenkins warns about background noise and suggests push-to-talk
 
 ---
 
 ## Customization
+
+### Personal Lore Overlay
+Create a `private-lore.js` file (gitignored, never pushed) to override generic lore with your personal server details:
+- Custom key figures (replace "the Godhead" with real names)
+- Custom VIP arrival messages
+- Custom VIP response prompts
+- Custom rival callout notes
+- Custom Codex quote overrides
+
+See the comments in `personality.js` for the overlay format.
 
 ### Changing Jenkins' Personality
 Edit `personality.js` to change:
@@ -242,6 +286,9 @@ In `deepseek.js`, you can swap `deepseek-chat` for any OpenAI-compatible model. 
 ### Adding Sin Patterns
 In `sins.js`, add patterns to the `SIN_PATTERNS` object under the appropriate severity tier. Each pattern needs a `name`, array of `patterns` (regexes), and `description`.
 
+### Adding Alter Egos
+In `alter-egos.js`, add new entries to the `ALTER_EGOS` object with a `name`, `description`, `weight`, `promptPrefix`, and `voice` config. Optionally add `triggers` (array of regexes) for content-based activation.
+
 ### Adding Commands
 In `bot.js`, add new cases to the `switch (command)` block in the message handler.
 
@@ -256,7 +303,7 @@ In `bot.js`, add new cases to the `switch (command)` block in the message handle
 | AI Brain | [DeepSeek](https://deepseek.com/) | Chat completions, personality responses |
 | Voice Synthesis | [ElevenLabs](https://elevenlabs.io/) | Text-to-speech with custom voice |
 | Voice Recognition | [ElevenLabs Scribe](https://elevenlabs.io/) | Speech-to-text transcription |
-| Fallback Voice | [Edge TTS](https://github.com/nicbus/edge-tts-universal) | Free Microsoft Neural TTS backup |
+| Fallback Voice | [Edge TTS](https://github.com/nicbus/edge-tts-universal) | Free Microsoft Neural TTS backup + alter ego voices |
 | Audio Processing | [prism-media](https://github.com/amishshah/prism-media) | Opus decoding for voice receive |
 | Audio Encoding | [ffmpeg-static](https://github.com/eugeneware/ffmpeg-static) | Audio format conversion |
 
@@ -270,10 +317,19 @@ Jenkins is designed to be cheap to run:
 |---------|------|-------|
 | **DeepSeek** | ~$0.14/M input tokens | Extremely cheap. A day of active Jenkins costs pennies |
 | **ElevenLabs** | Free tier: 10K credits/month | ~10 minutes of TTS. Creator plan ($22/mo) for heavy use |
-| **Edge TTS** | Free | Automatic fallback when ElevenLabs runs out |
+| **Edge TTS** | Free | Used for alter ego voices AND as automatic fallback |
 | **Discord** | Free | Bot hosting is your responsibility |
 
-**Tip:** The noise filter saves significant ElevenLabs credits. Without it, background noise (TV, keyboard, mouse) will burn through credits rapidly. Jenkins warns you when this happens.
+**Cost-saving features:**
+- Advanced noise filter prevents wasted STT credits on keyboard clicks, TV audio, etc.
+- All alter ego voices use free Edge TTS — only Jenkins Prime uses premium ElevenLabs
+- Credit monitoring warns you before you run out
+
+---
+
+## Disclaimer
+
+Jenkins is a fictional comedy bot and original character; any resemblance to real persons is purely stylistic parody. Certain comedy modes are inspired by the *styles* of public figures and comedians, but Jenkins does not impersonate, represent, or claim affiliation with any real individual. No real person's name or likeness is used in any user-facing output. All content is generated for entertainment and comedic purposes only as part of a non-commercial, open-source personal project. This project is protected as parody and transformative commentary under applicable fair use principles. Nothing produced by this bot is intended to defame, harm, or misrepresent any person, living or dead.
 
 ---
 
