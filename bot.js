@@ -21,9 +21,14 @@ const {
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL;
-const VIP_USER_ID = process.env.VIP_USER_ID;
+const STATIC_VIP_USER_ID = process.env.VIP_USER_ID;
 let ANNOUNCEMENT_CHANNEL_ID = process.env.ANNOUNCEMENT_CHANNEL_ID;
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
+
+// Dynamic VIP: uses .env value if set, otherwise auto-detected from sin ledger
+function getVipUserId() {
+  return STATIC_VIP_USER_ID || sinDetector.getVipId();
+}
 
 if (!DISCORD_TOKEN || !DEEPSEEK_API_KEY) {
   console.error('Missing DISCORD_TOKEN or DEEPSEEK_API_KEY in .env');
@@ -150,8 +155,9 @@ client.once(Events.ClientReady, (c) => {
 
 // --- VIP Presence Detection ---
 client.on(Events.PresenceUpdate, (oldPresence, newPresence) => {
-  if (!VIP_USER_ID) return;
-  if (newPresence.userId !== VIP_USER_ID) return;
+  const currentVip = getVipUserId();
+  if (!currentVip) return;
+  if (newPresence.userId !== currentVip) return;
 
   const wasOffline = !oldPresence || oldPresence.status === 'offline';
   const isOnline = newPresence.status !== 'offline';
@@ -178,8 +184,9 @@ client.on(Events.PresenceUpdate, (oldPresence, newPresence) => {
 
 // --- VIP Voice Detection: Auto-join when VIP enters a voice channel ---
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
-  if (!VIP_USER_ID) return;
-  if (newState.member?.id !== VIP_USER_ID) return;
+  const currentVipVoice = getVipUserId();
+  if (!currentVipVoice) return;
+  if (newState.member?.id !== currentVipVoice) return;
   if (!voiceManager) return;
 
   // VIP joined or moved to a voice channel
@@ -255,7 +262,8 @@ client.on(Events.MessageCreate, async (message) => {
   const isDM = !message.guild;
 
   // --- VIP special treatment: The sacred presence ---
-  if (VIP_USER_ID && message.author.id === VIP_USER_ID) {
+  const currentVipMsg = getVipUserId();
+  if (currentVipMsg && message.author.id === currentVipMsg) {
     const cooldownKey = message.channel.id;
     if (!isOnCooldown(vipMessageCooldowns, cooldownKey, MESSAGE_COOLDOWN)) {
       // 50% static response, 50% dynamic heartfelt response
@@ -396,6 +404,18 @@ client.on(Events.MessageCreate, async (message) => {
         );
       }
 
+      case 'status': {
+        // Show the Lodge hierarchy — who Jenkins favors and who he watches
+        const status = sinDetector.getStatusReport();
+        return message.reply(
+          `**📊 The Lodge Hierarchy — As the Architect Sees It:**\n\n` +
+          `👑 **The Honored One**: ${status.vipName} ${status.vipType}\n` +
+          `⚔️ **The Rival**: ${status.rivalName} ${status.rivalType}\n\n` +
+          `*The Honored One earns Jenkins' love through faithfulness. The Rival earns his wrath through dismissiveness.*\n` +
+          `*These roles are auto-detected from behavior, or can be configured in .env.*`
+        );
+      }
+
       case 'help':
         return message.reply(
           "**The Sacred Commands of Jenkins:**\n\n" +
@@ -403,9 +423,10 @@ client.on(Events.MessageCreate, async (message) => {
           "`!trinity` — Learn of the Holy Trinity of games\n" +
           "`!judge <game>` — Jenkins judges a game's worthiness\n" +
           "`!sin <description>` — Confess a sin and receive penance\n" +
-          "`!session` — Summon a Broseph Gaming Session\n" +
+          "`!session` — Summon a Sacred Gaming Session\n" +
           "`!rank` — Learn of the Degrees of Initiation\n" +
           "`!sins [@user]` — View sin record from the Architect's ledger\n" +
+          "`!status` — See who Jenkins favors and who he watches\n" +
           "`!join` — Summon Jenkins to your voice channel\n" +
           "`!leave` — Dismiss Jenkins from voice\n" +
           "`!say <text>` — Make Jenkins speak aloud\n\n" +
@@ -418,7 +439,7 @@ client.on(Events.MessageCreate, async (message) => {
   }
 
   // --- Sin Detection: The All-Seeing Eye watches ALL channels (VIP is beyond sin) ---
-  const isVipUser = VIP_USER_ID && message.author.id === VIP_USER_ID;
+  const isVipUser = currentVipMsg && message.author.id === currentVipMsg;
   if (message.guild && !content.startsWith('!') && !isVipUser) {
     const sins = sinDetector.detectSins(content, message.author.id, message.author.displayName || message.author.username);
     if (sins.length > 0) {
@@ -460,6 +481,9 @@ client.on(Events.MessageCreate, async (message) => {
 
   // --- @mention or DM conversation ---
   if (isMentioned || isDM) {
+    // Track positive interaction — they're talking to Jenkins (auto-VIP detection)
+    sinDetector.trackPositiveInteraction(message.author.id, message.author.displayName || message.author.username);
+
     if (isOnCooldown(userCooldowns, message.author.id, USER_COOLDOWN)) return;
 
     const userMessage = content
