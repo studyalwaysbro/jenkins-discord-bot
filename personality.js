@@ -178,13 +178,56 @@ const SESSION_SUMMONS = [
   "**BY THE AUTHORITY VESTED IN ME BY THE UNSPOKEN —**\n\nI declare a **Broseph Gaming Session** open for scheduling.\n\nLet every brother respond. Let no man ghost. Let the Trinity be installed and ready.\n\nThe Lodge awaits your answer. What say you, Brethren?",
 ];
 
+// ═══════════════════════════════════════════════════════════════
+// Private Lore Overlay — loads personal overrides if they exist
+// ═══════════════════════════════════════════════════════════════
+
+let PRIVATE_LORE = null;
+try {
+  PRIVATE_LORE = require('./private-lore');
+  console.log('[Lore] Private lore overlay loaded — personal Lodge mode active.');
+} catch {
+  // No private-lore.js found — using generic public lore
+}
+
+// Apply system prompt overrides
+let FINAL_SYSTEM_PROMPT = SYSTEM_PROMPT;
+if (PRIVATE_LORE?.systemPromptOverrides) {
+  const overrides = PRIVATE_LORE.systemPromptOverrides;
+  if (overrides.keyFigures) {
+    FINAL_SYSTEM_PROMPT = FINAL_SYSTEM_PROMPT.replace(
+      /KEY FIGURES:[\s\S]*?(?=\nTHE LODGE)/,
+      overrides.keyFigures + '\n\n'
+    );
+  }
+  if (overrides.instrumentLine) {
+    FINAL_SYSTEM_PROMPT = FINAL_SYSTEM_PROMPT.replace(
+      'through your instrument, the Godhead.',
+      overrides.instrumentLine
+    );
+  }
+}
+
+// Apply codex quote overrides
+let FINAL_CODEX_QUOTES = [...CODEX_QUOTES];
+if (PRIVATE_LORE?.codexOverrides) {
+  for (const [index, quote] of Object.entries(PRIVATE_LORE.codexOverrides)) {
+    FINAL_CODEX_QUOTES[parseInt(index)] = quote;
+  }
+}
+
+// Apply VIP arrival/message overrides
+const FINAL_VIP_ARRIVALS = PRIVATE_LORE?.vipArrivals || VIP_ARRIVALS;
+const FINAL_VIP_MESSAGE_RESPONSES = PRIVATE_LORE?.vipMessageResponses || VIP_MESSAGE_RESPONSES;
+
 module.exports = {
-  SYSTEM_PROMPT,
-  CODEX_QUOTES,
+  SYSTEM_PROMPT: FINAL_SYSTEM_PROMPT,
+  CODEX_QUOTES: FINAL_CODEX_QUOTES,
   TRINITY_GAMES,
   SIN_HIERARCHY,
   MASONIC_DEGREES,
-  VIP_ARRIVALS,
-  VIP_MESSAGE_RESPONSES,
+  VIP_ARRIVALS: FINAL_VIP_ARRIVALS,
+  VIP_MESSAGE_RESPONSES: FINAL_VIP_MESSAGE_RESPONSES,
   SESSION_SUMMONS,
+  PRIVATE_LORE, // Export so other modules can access private overrides
 };
