@@ -31,6 +31,7 @@ process.env.FFMPEG_PATH = ffmpegPath;
  * Returns a value between 0 and 1 (normalized).
  */
 function calculateRMS(pcmBuffer) {
+  if (pcmBuffer.length % 2 !== 0) pcmBuffer = pcmBuffer.subarray(0, pcmBuffer.length - 1);
   const samples = pcmBuffer.length / 2;
   if (samples === 0) return 0;
   let sumSquares = 0;
@@ -45,6 +46,7 @@ function calculateRMS(pcmBuffer) {
  * Calculate peak absolute sample value (normalized 0-1).
  */
 function calculatePeak(pcmBuffer) {
+  if (pcmBuffer.length % 2 !== 0) pcmBuffer = pcmBuffer.subarray(0, pcmBuffer.length - 1);
   let maxAbs = 0;
   for (let i = 0; i < pcmBuffer.length; i += 2) {
     const abs = Math.abs(pcmBuffer.readInt16LE(i));
@@ -60,6 +62,7 @@ function calculatePeak(pcmBuffer) {
  * Ambient hum: very low ZCR (<30)
  */
 function calculateZCR(pcmBuffer) {
+  if (pcmBuffer.length % 2 !== 0) pcmBuffer = pcmBuffer.subarray(0, pcmBuffer.length - 1);
   let crossings = 0;
   let prevSign = 0;
   for (let i = 0; i < pcmBuffer.length; i += 2) {
@@ -259,7 +262,24 @@ function classifyAudioType(pcmBuffer) {
 let lastClassification = null;
 function isLikelySpeech(pcmBuffer) {
   lastClassification = classifyAudioType(pcmBuffer);
-  return lastClassification.type === 'speech';
+
+  if (lastClassification.type === 'speech') return true;
+
+  // Pass "uncertain" clips through to STT if they look like they might be speech:
+  // - duration > 1.5s (short uncertain clips are likely noise)
+  // - some sustained energy (maxConsecutiveLoud > 3, i.e. 30ms+ of loud audio)
+  // This catches quieter speech that doesn't hit enough speechScore criteria,
+  // while still filtering obvious non-speech (keyboard, click, impulse, ambient).
+  if (lastClassification.type === 'uncertain') {
+    const durationSec = pcmBuffer.length / 96000;
+    const envelope = analyzeEnergyEnvelope(pcmBuffer);
+    if (durationSec > 1.5 && envelope.maxConsecutiveLoud > 3) {
+      lastClassification.type = 'uncertain_speech';
+      return true;
+    }
+  }
+
+  return false;
 }
 
 // ═══════════════════════════════════════════════════════════════

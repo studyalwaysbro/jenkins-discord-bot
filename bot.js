@@ -77,8 +77,10 @@ const vipMessageCooldowns = new Map(); // channelId -> timestamp
 const userCooldowns = new Map(); // userId -> timestamp
 
 const PRESENCE_COOLDOWN = 30 * 60 * 1000; // 30 minutes
+const STAVROS_COOLDOWN = 20 * 60 * 1000;  // 20 minutes between Stavros breaks
+let lastStavrosBreak = 0;
 const MESSAGE_COOLDOWN = 5 * 60 * 1000;   // 5 minutes
-const USER_COOLDOWN = 3 * 1000;            // 3 seconds per user
+const USER_COOLDOWN = 10 * 1000;           // 10 seconds per user
 
 // --- Utility ---
 function pick(arr) {
@@ -286,7 +288,7 @@ client.on(Events.MessageCreate, async (message) => {
     if (!isOnCooldown(vipMessageCooldowns, cooldownKey, MESSAGE_COOLDOWN)) {
       // 50% static response, 50% dynamic heartfelt response
       if (Math.random() < 0.5) {
-        message.reply(pick(VIP_MESSAGE_RESPONSES));
+        message.reply(pick(VIP_MESSAGE_RESPONSES)).catch(() => {});
       } else {
         try {
           const response = await chat(
@@ -294,11 +296,12 @@ client.on(Events.MessageCreate, async (message) => {
             SYSTEM_PROMPT,
             PRIVATE_LORE?.vipMessagePrompt?.(content) || `The Honored One — your most devoted and sacred presence — has just spoken in the chat. They said: "${content}". Respond with genuine warmth, reverence, and appreciation. You LOVE the Honored One. They are the most faithful. Sometimes be deeply moved by their mere presence, sometimes engage with what they said with extra enthusiasm and care. Show that their words matter more than anyone else's to you. Keep it 1-3 sentences. Don't be the same every time — vary between tender, ecstatic, reverent, and genuinely engaged.`
           );
-          message.reply(response);
+          message.reply(response).catch(() => {});
         } catch {
-          message.reply(pick(VIP_MESSAGE_RESPONSES));
+          message.reply(pick(VIP_MESSAGE_RESPONSES)).catch(() => {});
         }
       }
+      return; // Don't double-reply with channel/mention handlers
     }
   }
 
@@ -326,13 +329,18 @@ client.on(Events.MessageCreate, async (message) => {
         }
         if (isOnCooldown(userCooldowns, message.author.id, USER_COOLDOWN)) return;
 
-        await message.channel.sendTyping();
-        const response = await chat(
-          deepseek,
-          SYSTEM_PROMPT,
-          `A Brother named ${message.author.displayName || message.author.username} asks you to deliver divine judgment upon the game: "${gameName}". Judge its worthiness. Is it worthy of the Sea of Creativity? Could it ever approach the Trinity? Be dramatic, be funny, be honest. Reference specific things about the game if you know them.`
-        );
-        return message.reply(response);
+        try {
+          await message.channel.sendTyping();
+          const response = await chat(
+            deepseek,
+            SYSTEM_PROMPT,
+            `A Brother named ${message.author.displayName || message.author.username} asks you to deliver divine judgment upon the game: "${gameName}". Judge its worthiness. Is it worthy of the Sea of Creativity? Could it ever approach the Trinity? Be dramatic, be funny, be honest. Reference specific things about the game if you know them.`
+          );
+          return message.reply(response);
+        } catch (err) {
+          console.error('[CMD] !judge error:', err.message);
+          return message.reply('The Architect\'s vision is clouded. Try again, Brother.').catch(() => {});
+        }
       }
 
       case 'sin': {
@@ -342,13 +350,18 @@ client.on(Events.MessageCreate, async (message) => {
         }
         if (isOnCooldown(userCooldowns, message.author.id, USER_COOLDOWN)) return;
 
-        await message.channel.sendTyping();
-        const response = await chat(
-          deepseek,
-          SYSTEM_PROMPT,
-          `A Brother named ${message.author.displayName || message.author.username} confesses the following sin: "${sinDesc}". Classify this sin (venial, mortal, or unforgivable) according to the Codex. Assign a creative, thematic penance. Be dramatic but fair. Remember: the spirit of the Codex is fraternity, not cruelty.`
-        );
-        return message.reply(response);
+        try {
+          await message.channel.sendTyping();
+          const response = await chat(
+            deepseek,
+            SYSTEM_PROMPT,
+            `A Brother named ${message.author.displayName || message.author.username} confesses the following sin: "${sinDesc}". Classify this sin (venial, mortal, or unforgivable) according to the Codex. Assign a creative, thematic penance. Be dramatic but fair. Remember: the spirit of the Codex is fraternity, not cruelty.`
+          );
+          return message.reply(response);
+        } catch (err) {
+          console.error('[CMD] !sin error:', err.message);
+          return message.reply('The Architect\'s judgment falters. Confess again later.').catch(() => {});
+        }
       }
 
       case 'session':
@@ -486,9 +499,9 @@ client.on(Events.MessageCreate, async (message) => {
           const prefix = (alterEgo.name !== 'Jenkins Prime')
             ? `*[${alterEgo.name} has surfaced]*\n\n`
             : '';
-          await message.reply(prefix + callout);
-          return; // Don't double-reply with normal response
+          await message.reply(prefix + callout).catch(() => {});
         }
+        return; // Don't double-reply — return whether callout succeeded or not
       } else {
         // Still record the sin even if we don't call it out
         sinDetector.recordSin(message.author.id, message.author.displayName || message.author.username, topSin);
@@ -506,8 +519,9 @@ client.on(Events.MessageCreate, async (message) => {
         // Don't return — still process the message normally
       }
     }
-    // Stavros break: random comedy interjection (lower chance, no activity requirement)
-    else if (Math.random() < 0.015) { // 1.5% chance per message
+    // Stavros break: random comedy interjection (lower chance, no activity requirement, 20-min cooldown)
+    else if (Math.random() < 0.015 && Date.now() - lastStavrosBreak > STAVROS_COOLDOWN) {
+      lastStavrosBreak = Date.now();
       const stavrosBreak = await generateStavrosBreak(deepseek, SYSTEM_PROMPT);
       if (stavrosBreak) {
         await message.channel.send(stavrosBreak);
@@ -537,7 +551,7 @@ client.on(Events.MessageCreate, async (message) => {
       const prefix = (channelAlter.name !== 'Jenkins Prime' && isRivalInChannel)
         ? `*[${channelAlter.name} has surfaced]*\n\n`
         : '';
-      return message.reply(prefix + response);
+      return message.reply(prefix + response).catch(() => {});
     }
     return; // 30% chance Jenkins stays silent (even gods rest)
   }
@@ -555,6 +569,7 @@ client.on(Events.MessageCreate, async (message) => {
 
     if (!userMessage && !isDM) return; // empty mention, ignore
 
+    try {
     await message.channel.sendTyping();
 
     // Alter ego for rivals in direct conversation too
@@ -571,7 +586,11 @@ client.on(Events.MessageCreate, async (message) => {
     const prefix = (directAlter.name !== 'Jenkins Prime' && isRivalDirect)
       ? `*[${directAlter.name} has surfaced]*\n\n`
       : '';
-    return message.reply(prefix + response);
+    return message.reply(prefix + response).catch(() => {});
+    } catch (err) {
+      console.error('[MSG] Reply error:', err.message);
+      message.reply('The Architect\'s mind wanders. Speak again, Brother.').catch(() => {});
+    }
   }
 });
 
