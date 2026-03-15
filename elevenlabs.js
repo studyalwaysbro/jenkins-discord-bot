@@ -169,14 +169,23 @@ async function edgeTTS(text, voice, rate, pitch) {
   rate = rate || '-5%';
   pitch = pitch || '-15Hz';
 
-  // Dynamic import since edge-tts-universal is ESM
-  const { Communicate } = await import('edge-tts-universal');
-  const comm = new Communicate(text, voice, rate, pitch, '+0%');
-  const buffers = [];
-  for await (const chunk of comm.stream()) {
-    if (chunk.type === 'audio' && chunk.data) buffers.push(chunk.data);
+  try {
+    // Dynamic import since edge-tts-universal is ESM
+    const { Communicate } = await import('edge-tts-universal');
+    const comm = new Communicate(text, voice, rate, pitch, '+0%');
+    const buffers = [];
+    for await (const chunk of comm.stream()) {
+      if (chunk.type === 'audio' && chunk.data) buffers.push(chunk.data);
+    }
+    const result = Buffer.concat(buffers);
+    if (result.length === 0) {
+      throw new Error('Edge TTS returned empty audio');
+    }
+    return result;
+  } catch (err) {
+    console.error('[EdgeTTS] Error:', err.message);
+    throw new Error(`Edge TTS failed: ${err.message}`);
   }
-  return Buffer.concat(buffers);
 }
 
 // ═══════════════════════════════════════════════════════════════

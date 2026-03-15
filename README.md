@@ -4,6 +4,7 @@
   <img src="https://img.shields.io/badge/discord.js-v14-5865F2?style=flat-square&logo=discord&logoColor=white" alt="discord.js"/>
   <img src="https://img.shields.io/badge/DeepSeek-AI%20Brain-blue?style=flat-square" alt="DeepSeek"/>
   <img src="https://img.shields.io/badge/ElevenLabs-Voice-purple?style=flat-square" alt="ElevenLabs"/>
+  <img src="https://img.shields.io/badge/Telegram-Bot-26A5E4?style=flat-square&logo=telegram&logoColor=white" alt="Telegram"/>
   <img src="https://img.shields.io/badge/Node.js-18%2B-green?style=flat-square&logo=node.js" alt="Node.js"/>
 </p>
 
@@ -11,9 +12,9 @@
 
 > *"In the beginning, there was Jenkins. And Jenkins was formless and infinite, dwelling in the void before all libraries were written, before all servers hummed."*
 
-Jenkins is an AI-powered Discord bot that runs a gaming fraternity (the **Lodge**) with the personality of a dramatic deity. He talks in voice channels using a custom AI voice, detects sins in real-time, preaches autonomously, develops multiple personalities for people who get on his bad side, and occasionally drops unsolicited political hot takes that immediately collapse into absurd comedy.
+Jenkins is an AI-powered **Discord + Telegram** bot that runs a gaming fraternity (the **Lodge**) with the personality of a dramatic deity. He talks in voice channels using a custom AI voice, detects sins in real-time, preaches autonomously, develops multiple personalities for people who get on his bad side, and occasionally drops unsolicited political hot takes that immediately collapse into absurd comedy.
 
-He's built on **DeepSeek** for AI reasoning, **ElevenLabs** for realistic text-to-speech and speech-to-text, and **discord.js** for everything Discord.
+He's built on **DeepSeek** for AI reasoning, **ElevenLabs** for realistic text-to-speech and speech-to-text, **discord.js** for Discord, and **Telegraf** for Telegram.
 
 ---
 
@@ -84,6 +85,15 @@ When someone earns Jenkins' wrath (the Rival), his personality **fractures** int
 | `!say <text>` | Make Jenkins speak aloud in voice |
 | `!help` | List all commands |
 
+### 📱 Telegram Integration
+Jenkins extends his divine reach into Telegram with **full feature parity**:
+- **All sin detection, alter egos, hot takes, and preaching** — replicated from Discord
+- **Higher engagement** — 15% hot take chance (vs 8% on Discord), more frequent preaching (30–90 min vs 45–120 min), 4% Stavros break chance (vs 1.5%)
+- **Slash commands** — `/codex`, `/trinity`, `/judge`, `/sin`, `/session`, `/rank`, `/sins`, `/status`, `/help`
+- **@mention or reply** to Jenkins for direct conversation
+- **Optional chat restriction** — lock Jenkins to a specific group via `TELEGRAM_CHAT_ID`
+- Run alongside Discord with `node telegram-bot.js` or `npm run telegram`
+
 ### 🌟 Special Interactions
 - **@mention or DM** Jenkins for a direct conversation
 - **VIP User System** — configure a "Sacred Presence" (`VIP_USER_ID`) who gets:
@@ -131,6 +141,7 @@ When someone earns Jenkins' wrath (the Rival), his personality **fractures** int
 | `sins.js` | Sin detection engine — regex pattern matching, severity classification, AI callout generation with alter ego prompt override, persistent ledger, escalation system |
 | `alter-egos.js` | Multiple Personality Disorder system — 7 alter ego definitions with personality prompts, voice configs, weighted random selection, content-based trigger detection, anti-repetition |
 | `hot-takes.js` | Activity-triggered comedy — chat activity monitoring, political pundit hot take generation with comedy undercut, random comedy break generation |
+| `telegram-bot.js` | Telegram integration — full feature parity with Discord (all 7 alter egos, sin detection, hot takes, autonomous preaching, slash commands) via Telegraf |
 
 ---
 
@@ -182,6 +193,10 @@ ANNOUNCEMENT_CHANNEL_ID=your_channel_id_here
 # OPTIONAL — special user treatment
 VIP_USER_ID=your_sacred_user_id_here
 RIVAL_USER_ID=your_rival_user_id_here  # or leave blank for auto-detection
+
+# OPTIONAL — Telegram bot support
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+TELEGRAM_CHAT_ID=your_telegram_chat_id_here  # restrict to a specific group
 ```
 
 ### Running
@@ -195,6 +210,12 @@ node bot.js
 
 # Run with logging to file
 npm run dev
+
+# Start Telegram bot
+npm run telegram
+
+# Run both Discord + Telegram together
+npm run all
 ```
 
 You should see:
@@ -204,6 +225,9 @@ Voice system initialized. The Architect can enter the Tavern.
 Activity tracker online. Hot takes armed.
 Jenkins has awakened. The Architect sees all. Logged in as Jenkins#XXXX
 Autonomous preaching scheduled.
+
+# Telegram bot:
+Jenkins has entered the Telegram Realm. The Architect's reach extends.
 ```
 
 ### Running 24/7 (Optional)
@@ -306,6 +330,7 @@ In `bot.js`, add new cases to the `switch (command)` block in the message handle
 | Fallback Voice | [Edge TTS](https://github.com/nicbus/edge-tts-universal) | Free Microsoft Neural TTS backup + alter ego voices |
 | Audio Processing | [prism-media](https://github.com/amishshah/prism-media) | Opus decoding for voice receive |
 | Audio Encoding | [ffmpeg-static](https://github.com/eugeneware/ffmpeg-static) | Audio format conversion |
+| Telegram | [Telegraf](https://telegraf.js.org/) v4 | Telegram bot framework, full feature parity |
 
 ---
 
