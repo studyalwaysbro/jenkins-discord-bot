@@ -68,7 +68,9 @@ He's built on **DeepSeek** for AI reasoning, **ElevenLabs** for realistic text-t
   - Special ecstatic greetings in voice
   - Extra-warm AI-generated responses to every message
   - Exempt from sin detection (they are beyond sin)
-- **Auto-Rival Detection** — Jenkins automatically identifies the biggest sinner (whoever dismisses him the most) and treats them as his nemesis with 3x more callouts and harsher roasts. Or configure manually via `RIVAL_USER_ID`
+- **Auto-Rival Detection** — Jenkins automatically identifies whoever dismisses him the most (3+ dismissal sins) as his nemesis with 3x callouts and savage roasts. Or set `RIVAL_USER_ID` manually
+- **Auto-VIP Detection** — Jenkins tracks who talks to him the most and sins the least. After 5+ positive interactions, the most faithful user is auto-promoted to "the Honored One". Or set `VIP_USER_ID` manually
+- **`!status`** — see the current Lodge hierarchy (who Jenkins favors and who he watches)
 - **Jenkins Channel** — responds to 70% of messages in his designated channel with full personality
 - **Omniscient Q&A** — Jenkins answers ANY question (math, science, history, coding, etc.) in character
 

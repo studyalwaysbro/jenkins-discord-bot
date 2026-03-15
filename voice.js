@@ -326,7 +326,8 @@ class VoiceManager {
       } catch {}
 
       // Check if this is VIP (sacred presence — beyond sin, extra love)
-      const isVip = process.env.VIP_USER_ID && userId === process.env.VIP_USER_ID;
+      const vipId = this.sinDetector ? this.sinDetector.getVipId() : process.env.VIP_USER_ID;
+      const isVip = vipId && userId === vipId;
 
       // ── Sin Detection in Voice — The Architect hears all (except VIP, who is beyond sin) ──
       if (this.sinDetector && !isVip) {
@@ -361,6 +362,11 @@ class VoiceManager {
       if (!/jenk[io]n/i.test(transcript)) {
         console.log(`[Voice] No "Jenkins" keyword in transcript, ignoring`);
         return;
+      }
+
+      // Track positive interaction — they said Jenkins' name (used for auto-VIP detection)
+      if (this.sinDetector) {
+        this.sinDetector.trackPositiveInteraction(userId, displayName);
       }
 
       // Get Jenkins' response
