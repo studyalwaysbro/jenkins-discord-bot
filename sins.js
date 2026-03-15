@@ -162,15 +162,97 @@ class SinDetector {
     this.globalCalloutHourStart = Date.now();
     this.rivalIds = new Set();        // Populated from .env or auto-detected
     this.autoRivalId = null;           // Auto-detected rival (most Jenkins-dismissive user)
-    this.jenkinsDisrespect = new Map(); // userId -> count of Jenkins-related sins
+    this.autoVipId = null;             // Auto-detected VIP (most faithful user)
+    this.vipId = process.env.VIP_USER_ID || null; // Manual VIP override
 
     // Load Rival ID from env if set
     if (process.env.RIVAL_USER_ID) {
       this.rivalIds.add(process.env.RIVAL_USER_ID);
     }
 
-    // Auto-detect rival from ledger history
+    // Interaction tracking for auto-VIP detection
+    this.positiveInteractions = new Map(); // userId -> count (says Jenkins, engages positively)
+
+    // Auto-detect rival and VIP from ledger history
     this.recalculateAutoRival();
+    this.recalculateAutoVip();
+  }
+
+  /**
+   * Track positive interactions — used for auto-VIP detection.
+   * Called when someone says "Jenkins" and engages positively.
+   */
+  trackPositiveInteraction(userId, username) {
+    if (process.env.VIP_USER_ID) return; // Manual VIP overrides
+    const count = (this.positiveInteractions.get(userId) || 0) + 1;
+    this.positiveInteractions.set(userId, count);
+
+    // Store in ledger for persistence
+    if (!this.ledger[userId]) {
+      this.ledger[userId] = { username, sins: [], totalVenial: 0, totalMortal: 0, totalUnforgivable: 0 };
+    }
+    this.ledger[userId].positiveInteractions = count;
+    this.ledger[userId].username = username;
+    this.saveLedger();
+
+    this.recalculateAutoVip();
+  }
+
+  /**
+   * Auto-detect the VIP — the most faithful user (most positive interactions, fewest sins).
+   * Uses a score: positiveInteractions * 2 - totalSins
+   */
+  recalculateAutoVip() {
+    if (process.env.VIP_USER_ID) return; // Manual VIP overrides
+
+    let bestUserId = null;
+    let bestScore = -Infinity;
+
+    for (const [userId, entry] of Object.entries(this.ledger)) {
+      const positives = entry.positiveInteractions || 0;
+      const totalSins = (entry.totalVenial || 0) + (entry.totalMortal || 0) * 3 + (entry.totalUnforgivable || 0) * 10;
+      const score = positives * 2 - totalSins;
+
+      if (positives >= 5 && score > bestScore) { // Minimum 5 positive interactions
+        bestScore = score;
+        bestUserId = userId;
+      }
+    }
+
+    if (bestUserId && bestUserId !== this.autoVipId) {
+      this.autoVipId = bestUserId;
+      const name = this.ledger[bestUserId]?.username || 'Unknown';
+      console.log(`[Sins] AUTO-VIP DETECTED: ${name} (${bestUserId}) — the most faithful Brother`);
+    }
+  }
+
+  /**
+   * Get the current VIP user ID (manual or auto-detected)
+   */
+  getVipId() {
+    return this.vipId || this.autoVipId;
+  }
+
+  /**
+   * Get the current Rival user ID (manual or auto-detected)
+   */
+  getRivalId() {
+    if (process.env.RIVAL_USER_ID) return process.env.RIVAL_USER_ID;
+    return this.autoRivalId;
+  }
+
+  /**
+   * Get status report of auto-detected roles
+   */
+  getStatusReport() {
+    const vipId = this.getVipId();
+    const rivalId = this.getRivalId();
+    const vipName = vipId ? (this.ledger[vipId]?.username || 'Unknown') : 'None yet';
+    const rivalName = rivalId ? (this.ledger[rivalId]?.username || 'Unknown') : 'None yet';
+    const vipType = process.env.VIP_USER_ID ? '(configured)' : '(auto-detected)';
+    const rivalType = process.env.RIVAL_USER_ID ? '(configured)' : '(auto-detected)';
+
+    return { vipName, vipId, vipType, rivalName, rivalId, rivalType };
   }
 
   /**
