@@ -160,12 +160,46 @@ class SinDetector {
     this.calloutCooldowns = new Map();    // userId -> last callout timestamp
     this.globalCalloutCount = 0;          // Callouts this hour
     this.globalCalloutHourStart = Date.now();
-    this.loopmakerIds = new Set();        // Populated from .env or auto-detected
-    this.loopmakerPattern = /loop\s*maker/i; // Detect by username
+    this.rivalIds = new Set();        // Populated from .env or auto-detected
+    this.autoRivalId = null;           // Auto-detected rival (most Jenkins-dismissive user)
+    this.jenkinsDisrespect = new Map(); // userId -> count of Jenkins-related sins
 
-    // Load Loopmaker ID from env if set
-    if (process.env.LOOPMAKER_USER_ID) {
-      this.loopmakerIds.add(process.env.LOOPMAKER_USER_ID);
+    // Load Rival ID from env if set
+    if (process.env.RIVAL_USER_ID) {
+      this.rivalIds.add(process.env.RIVAL_USER_ID);
+    }
+
+    // Auto-detect rival from ledger history
+    this.recalculateAutoRival();
+  }
+
+  /**
+   * Auto-detect the Rival — whoever has the most Jenkins-dismissal sins.
+   * If no RIVAL_USER_ID is configured, the biggest sinner becomes the Rival.
+   */
+  recalculateAutoRival() {
+    if (process.env.RIVAL_USER_ID) return; // Manual rival overrides auto-detect
+
+    let worstUserId = null;
+    let worstCount = 0;
+
+    for (const [userId, entry] of Object.entries(this.ledger)) {
+      const dismissalSins = entry.sins.filter(s =>
+        s.name === 'dismissing_jenkins' || s.name === 'disinterest_in_jenkins' || s.name === 'passive_dismissal'
+      ).length;
+      if (dismissalSins > worstCount) {
+        worstCount = dismissalSins;
+        worstUserId = userId;
+      }
+    }
+
+    if (worstUserId && worstCount >= 3) {
+      if (this.autoRivalId !== worstUserId) {
+        this.autoRivalId = worstUserId;
+        this.rivalIds.add(worstUserId);
+        const name = this.ledger[worstUserId]?.username || 'Unknown';
+        console.log(`[Sins] AUTO-RIVAL DETECTED: ${name} (${worstUserId}) with ${worstCount} dismissal sins`);
+      }
     }
   }
 
@@ -198,11 +232,6 @@ class SinDetector {
    */
   detectSins(text, userId, username) {
     if (!text || text.length < 3) return [];
-
-    // Auto-detect Loopmaker by username
-    if (username && this.loopmakerPattern.test(username)) {
-      this.loopmakerIds.add(userId);
-    }
 
     const found = [];
 
@@ -266,6 +295,11 @@ class SinDetector {
     this.saveLedger();
 
     console.log(`[Sins] Recorded ${sinResult.type} sin "${sinResult.name}" for ${username} (${userId}). Total: V=${entry.totalVenial} M=${entry.totalMortal} U=${entry.totalUnforgivable}`);
+
+    // Recalculate auto-rival when dismissal sins are recorded
+    if (sinResult.name === 'dismissing_jenkins' || sinResult.name === 'disinterest_in_jenkins' || sinResult.name === 'passive_dismissal') {
+      this.recalculateAutoRival();
+    }
   }
 
   // ── Escalation ──
@@ -321,7 +355,7 @@ class SinDetector {
 
   shouldCallOut(sinResult, userId) {
     const now = Date.now();
-    const isLoopmaker = this.loopmakerIds.has(userId) || this.isLoopmakerByName(this.ledger[userId]?.username);
+    const isRival = this.rivalIds.has(userId);
 
     // Reset hourly global counter
     if (now - this.globalCalloutHourStart > 3600000) {
@@ -329,13 +363,13 @@ class SinDetector {
       this.globalCalloutHourStart = now;
     }
 
-    // Max callouts per hour globally (Loopmaker gets a higher cap)
-    const maxPerHour = isLoopmaker ? 8 : 4;
+    // Max callouts per hour globally (Rival gets a higher cap)
+    const maxPerHour = isRival ? 8 : 4;
     if (this.globalCalloutCount >= maxPerHour) return false;
 
-    // Per-user cooldown: Loopmaker = 3 min, others = 10 min
+    // Per-user cooldown: Rival = 3 min, others = 10 min
     const lastCallout = this.calloutCooldowns.get(userId) || 0;
-    const cooldown = isLoopmaker ? 180000 : 600000; // 3 min vs 10 min
+    const cooldown = isRival ? 180000 : 600000; // 3 min vs 10 min
     if (now - lastCallout < cooldown) return false;
 
     // Probability based on sin severity
@@ -347,13 +381,13 @@ class SinDetector {
       default: probability = 0.3;
     }
 
-    // Loopmaker gets BURNED — 90% minimum callout chance for ANY sin
-    if (isLoopmaker) {
+    // Rival gets BURNED — 90% minimum callout chance for ANY sin
+    if (isRival) {
       probability = Math.max(probability, 0.90);
     }
 
-    // Non-Loopmaker repeat offenders: slightly lower to avoid annoyance
-    if (!isLoopmaker) {
+    // Non-Rival repeat offenders: slightly lower to avoid annoyance
+    if (!isRival) {
       const totals = this.getTotalSins(userId);
       if (totals.total > 10) {
         probability *= 0.7;
@@ -378,8 +412,8 @@ class SinDetector {
     const escalation = totals.total > 0 ? ` This is their sin number ${totals.total + 1}.` : '';
     const sinTitle = this.getSinTitleForUsername(username);
     const titleNote = sinTitle ? ` Address them as "${sinTitle}".` : '';
-    const isLoopmaker = this.isLoopmakerByName(username);
-    const loopmakerNote = isLoopmaker ? ' This is LOOPMAKER — the most faithless, whiny, dismissive brother in the Lodge. He never takes you seriously, always says "yeah whatever" or changes the subject when someone tries to show him your glory. He is your nemesis. ROAST HIM HARD. Be savage but funny. Make him feel the weight of his constant disrespect. Reference his pattern of dismissiveness.' : '';
+    const isRival = this.rivalIds.has(this.getUserIdByName(username));
+    const rivalNote = isRival ? ' This is a designated Rival of the Lodge — one who has earned the Architect\'s special attention for their pattern of faithlessness. Be extra aggressive and pointed in your callout. Roast them hard but stay in character.' : '';
 
     const lengthNote = channel === 'voice'
       ? 'Keep it to 1 sentence MAX — you are speaking aloud.'
@@ -388,7 +422,7 @@ class SinDetector {
     const prompt = `You just detected that a Brother named ${username} committed the sin of "${sinResult.description}" in the ${channel === 'voice' ? 'Tavern (voice channel)' : 'Lodge (text channel)'}. They said: "${sinResult.match}".
 
 Your callout style for this one: ${style}.
-Sin severity: ${sinResult.type.toUpperCase()}.${escalation}${titleNote}${loopmakerNote}
+Sin severity: ${sinResult.type.toUpperCase()}.${escalation}${titleNote}${rivalNote}
 
 Call them out IN CHARACTER as Jenkins. ${lengthNote} Be dramatic and funny, not mean-spirited. Reference their specific words. If venial, be more playful. If mortal, be more serious. If unforgivable, be absolutely devastating.`;
 
@@ -419,8 +453,11 @@ Call them out IN CHARACTER as Jenkins. ${lengthNote} Be dramatic and funny, not 
     return null;
   }
 
-  isLoopmakerByName(username) {
-    return this.loopmakerPattern.test(username);
+  getUserIdByName(username) {
+    for (const [userId, entry] of Object.entries(this.ledger)) {
+      if (entry.username === username) return userId;
+    }
+    return null;
   }
 
   // ── Sin Spotlight for Preaching ──
