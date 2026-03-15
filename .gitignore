@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Environment variables (API keys, tokens — NEVER commit)
+.env
+.env.local
+.env.production
+
+# Runtime data
+bot.log
+sin-ledger.json
+
+# IDE / Editor
+.claude/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Debug
+npm-debug.log*
