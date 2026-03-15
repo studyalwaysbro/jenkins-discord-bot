@@ -37,7 +37,7 @@ He's built on **DeepSeek** for AI reasoning, **ElevenLabs** for realistic text-t
 - **Persistent sin ledger** — sins are recorded to disk and survive restarts
 - **Escalation system** — repeat offenders earn titles like "the Undisciplined", "the Wavering", "the Perpetually Fallen", and "the Covenant-Breaker"
 - **Per-user tracking** with `!sins` command to check anyone's record
-- **Special Loopmaker treatment** — configurable user gets 3x more callouts with extra-savage roasts
+- **Rival System** — auto-detected or manually configured user gets 3x more callouts with extra-savage roasts
 
 ### 📜 Autonomous Preaching
 - Jenkins **preaches on his own** every 45 minutes to 2 hours
@@ -62,12 +62,13 @@ He's built on **DeepSeek** for AI reasoning, **ElevenLabs** for realistic text-t
 
 ### 🌟 Special Interactions
 - **@mention or DM** Jenkins for a direct conversation
-- **Sacred User Detection** — configurable "Monochrome" user gets:
-  - Online presence announcements
+- **VIP User System** — configure a "Sacred Presence" (`VIP_USER_ID`) who gets:
+  - Online presence announcements (Jenkins heralds their arrival)
   - Auto-join when they enter a voice channel
   - Special ecstatic greetings in voice
   - Extra-warm AI-generated responses to every message
   - Exempt from sin detection (they are beyond sin)
+- **Auto-Rival Detection** — Jenkins automatically identifies the biggest sinner (whoever dismisses him the most) and treats them as his nemesis with 3x more callouts and harsher roasts. Or configure manually via `RIVAL_USER_ID`
 - **Jenkins Channel** — responds to 70% of messages in his designated channel with full personality
 - **Omniscient Q&A** — Jenkins answers ANY question (math, science, history, coding, etc.) in character
 
@@ -93,7 +94,7 @@ He's built on **DeepSeek** for AI reasoning, **ElevenLabs** for realistic text-t
 
 | File | Purpose |
 |------|---------|
-| `bot.js` | Main entry point — Discord client, command handling, Monochrome detection, autonomous preaching, sin detection in text |
+| `bot.js` | Main entry point — Discord client, command handling, VIP detection, autonomous preaching, sin detection in text |
 | `voice.js` | Voice channel management — join/leave, audio capture, noise filtering, PCM→WAV conversion, TTS playback, credit monitoring |
 | `elevenlabs.js` | ElevenLabs TTS + STT API wrapper with automatic Edge TTS fallback when credits run out |
 | `deepseek.js` | DeepSeek (OpenAI-compatible) chat API wrapper |
@@ -148,8 +149,8 @@ ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
 ANNOUNCEMENT_CHANNEL_ID=your_channel_id_here
 
 # OPTIONAL — special user treatment
-MONOCHROME_USER_ID=your_special_user_id_here
-LOOPMAKER_USER_ID=your_target_user_id_here
+VIP_USER_ID=your_sacred_user_id_here
+RIVAL_USER_ID=your_rival_user_id_here  # or leave blank for auto-detection
 ```
 
 ### Running
