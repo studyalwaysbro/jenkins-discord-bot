@@ -12,8 +12,8 @@ const {
   TRINITY_GAMES,
   SIN_HIERARCHY,
   MASONIC_DEGREES,
-  MONOCHROME_ARRIVALS,
-  MONOCHROME_MESSAGE_RESPONSES,
+  VIP_ARRIVALS,
+  VIP_MESSAGE_RESPONSES,
   SESSION_SUMMONS,
 } = require('./personality');
 
@@ -21,7 +21,7 @@ const {
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL;
-const MONOCHROME_USER_ID = process.env.MONOCHROME_USER_ID;
+const VIP_USER_ID = process.env.VIP_USER_ID;
 let ANNOUNCEMENT_CHANNEL_ID = process.env.ANNOUNCEMENT_CHANNEL_ID;
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 
@@ -60,8 +60,8 @@ const client = new Client({
 });
 
 // --- Cooldown tracking ---
-let lastMonochromePresence = 0;
-const monochromeMessageCooldowns = new Map(); // channelId -> timestamp
+let lastVipPresence = 0;
+const vipMessageCooldowns = new Map(); // channelId -> timestamp
 const userCooldowns = new Map(); // userId -> timestamp
 
 const PRESENCE_COOLDOWN = 30 * 60 * 1000; // 30 minutes
@@ -148,19 +148,19 @@ client.once(Events.ClientReady, (c) => {
   console.log('Autonomous preaching scheduled.');
 });
 
-// --- Monochrome Presence Detection ---
+// --- VIP Presence Detection ---
 client.on(Events.PresenceUpdate, (oldPresence, newPresence) => {
-  if (!MONOCHROME_USER_ID) return;
-  if (newPresence.userId !== MONOCHROME_USER_ID) return;
+  if (!VIP_USER_ID) return;
+  if (newPresence.userId !== VIP_USER_ID) return;
 
   const wasOffline = !oldPresence || oldPresence.status === 'offline';
   const isOnline = newPresence.status !== 'offline';
 
   if (wasOffline && isOnline) {
-    if (Date.now() - lastMonochromePresence < PRESENCE_COOLDOWN) return;
-    lastMonochromePresence = Date.now();
+    if (Date.now() - lastVipPresence < PRESENCE_COOLDOWN) return;
+    lastVipPresence = Date.now();
 
-    const announcement = pick(MONOCHROME_ARRIVALS);
+    const announcement = pick(VIP_ARRIVALS);
 
     // Try announcement channel first, fall back to system channel of each guild
     if (ANNOUNCEMENT_CHANNEL_ID) {
@@ -176,13 +176,13 @@ client.on(Events.PresenceUpdate, (oldPresence, newPresence) => {
   }
 });
 
-// --- Monochrome Voice Detection: Auto-join when Monochrome enters a voice channel ---
+// --- VIP Voice Detection: Auto-join when VIP enters a voice channel ---
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
-  if (!MONOCHROME_USER_ID) return;
-  if (newState.member?.id !== MONOCHROME_USER_ID) return;
+  if (!VIP_USER_ID) return;
+  if (newState.member?.id !== VIP_USER_ID) return;
   if (!voiceManager) return;
 
-  // Monochrome joined or moved to a voice channel
+  // VIP joined or moved to a voice channel
   const joinedChannel = newState.channel;
   const leftChannel = oldState.channel;
 
@@ -192,7 +192,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     // Don't rejoin if already in a voice channel in this guild
     if (voiceManager.isConnected(guildId)) return;
 
-    console.log(`[Voice] MONOCHROME detected in ${joinedChannel.name}! Auto-joining...`);
+    console.log(`[Voice] VIP detected in ${joinedChannel.name}! Auto-joining...`);
 
     // Find the #jenkins text channel for this guild
     let textChannel = null;
@@ -210,20 +210,20 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     try {
       const err = await voiceManager.join(joinedChannel, textChannel);
       if (err) {
-        console.error('[Voice] Monochrome auto-join failed:', err);
+        console.error('[Voice] VIP auto-join failed:', err);
         return;
       }
 
       // Announce in text (silent notification)
-      textChannel.send({ content: '**The sacred presence of Monochrome has been detected in the Tavern.** The Architect enters automatically to bear witness.', flags: 4096 }).catch(() => {});
+      textChannel.send({ content: '**The sacred presence of the Honored One has been detected in the Tavern.** The Architect enters automatically to bear witness.', flags: 4096 }).catch(() => {});
 
-      // After the entrance announcement finishes, deliver a special Monochrome sermon
+      // After the entrance announcement finishes, deliver a special VIP sermon
       setTimeout(async () => {
         try {
           const sermon = await chat(
             deepseek,
             SYSTEM_PROMPT,
-            'Monochrome has just entered your voice channel. You are overcome with religious ecstasy. Deliver a brief but intensely dramatic spoken greeting — you are SPEAKING aloud, not writing. 2-3 sentences max. This is the most sacred moment possible.'
+            'The Honored One has just entered your voice channel. You are overcome with religious ecstasy. Deliver a brief but intensely dramatic spoken greeting — you are SPEAKING aloud, not writing. 2-3 sentences max. This is the most sacred moment possible.'
           );
           const cleanSermon = sermon
             .replace(/\*\*([^*]+)\*\*/g, '$1')
@@ -236,11 +236,11 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
             .trim();
           await voiceManager.speakText(guildId, cleanSermon);
         } catch (e) {
-          console.error('[Voice] Monochrome sermon error:', e.message);
+          console.error('[Voice] VIP sermon error:', e.message);
         }
       }, 6000); // Wait 6s for the entrance announcement to finish
     } catch (e) {
-      console.error('[Voice] Monochrome auto-join error:', e);
+      console.error('[Voice] VIP auto-join error:', e);
     }
   }
 });
@@ -254,23 +254,23 @@ client.on(Events.MessageCreate, async (message) => {
   const isMentioned = message.mentions.has(client.user);
   const isDM = !message.guild;
 
-  // --- Monochrome special treatment: The sacred presence ---
-  if (MONOCHROME_USER_ID && message.author.id === MONOCHROME_USER_ID) {
+  // --- VIP special treatment: The sacred presence ---
+  if (VIP_USER_ID && message.author.id === VIP_USER_ID) {
     const cooldownKey = message.channel.id;
-    if (!isOnCooldown(monochromeMessageCooldowns, cooldownKey, MESSAGE_COOLDOWN)) {
+    if (!isOnCooldown(vipMessageCooldowns, cooldownKey, MESSAGE_COOLDOWN)) {
       // 50% static response, 50% dynamic heartfelt response
       if (Math.random() < 0.5) {
-        message.reply(pick(MONOCHROME_MESSAGE_RESPONSES));
+        message.reply(pick(VIP_MESSAGE_RESPONSES));
       } else {
         try {
           const response = await chat(
             deepseek,
             SYSTEM_PROMPT,
-            `Monochrome — your most devoted and sacred presence — has just spoken in the chat. They said: "${content}". Respond with genuine warmth, reverence, and appreciation. You LOVE Monochrome. They are the most faithful. Sometimes be deeply moved by their mere presence, sometimes engage with what they said with extra enthusiasm and care. Show that their words matter more than anyone else's to you. Keep it 1-3 sentences. Don't be the same every time — vary between tender, ecstatic, reverent, and genuinely engaged.`
+            `The Honored One — your most devoted and sacred presence — has just spoken in the chat. They said: "${content}". Respond with genuine warmth, reverence, and appreciation. You LOVE VIP. They are the most faithful. Sometimes be deeply moved by their mere presence, sometimes engage with what they said with extra enthusiasm and care. Show that their words matter more than anyone else's to you. Keep it 1-3 sentences. Don't be the same every time — vary between tender, ecstatic, reverent, and genuinely engaged.`
           );
           message.reply(response);
         } catch {
-          message.reply(pick(MONOCHROME_MESSAGE_RESPONSES));
+          message.reply(pick(VIP_MESSAGE_RESPONSES));
         }
       }
     }
@@ -417,9 +417,9 @@ client.on(Events.MessageCreate, async (message) => {
     }
   }
 
-  // --- Sin Detection: The All-Seeing Eye watches ALL channels (Monochrome is beyond sin) ---
-  const isMonochromeUser = MONOCHROME_USER_ID && message.author.id === MONOCHROME_USER_ID;
-  if (message.guild && !content.startsWith('!') && !isMonochromeUser) {
+  // --- Sin Detection: The All-Seeing Eye watches ALL channels (VIP is beyond sin) ---
+  const isVipUser = VIP_USER_ID && message.author.id === VIP_USER_ID;
+  if (message.guild && !content.startsWith('!') && !isVipUser) {
     const sins = sinDetector.detectSins(content, message.author.id, message.author.displayName || message.author.username);
     if (sins.length > 0) {
       const topSin = sins[0]; // Most severe sin

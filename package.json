@@ -8,7 +8,7 @@
     "dev": "node bot.js | tee bot.log"
   },
   "keywords": ["discord", "bot", "ai", "voice", "elevenlabs", "deepseek", "tts", "stt", "gaming"],
-  "author": "JB (Jonathan Borst)",
+  "author": "",
   "license": "MIT",
   "repository": {
     "type": "git",

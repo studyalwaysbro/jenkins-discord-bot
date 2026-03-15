@@ -325,11 +325,11 @@ class VoiceManager {
         displayName = member.displayName || member.user.username;
       } catch {}
 
-      // Check if this is Monochrome (sacred presence — beyond sin, extra love)
-      const isMonochrome = process.env.MONOCHROME_USER_ID && userId === process.env.MONOCHROME_USER_ID;
+      // Check if this is VIP (sacred presence — beyond sin, extra love)
+      const isVip = process.env.VIP_USER_ID && userId === process.env.VIP_USER_ID;
 
-      // ── Sin Detection in Voice — The Architect hears all (except Monochrome, who is beyond sin) ──
-      if (this.sinDetector && !isMonochrome) {
+      // ── Sin Detection in Voice — The Architect hears all (except VIP, who is beyond sin) ──
+      if (this.sinDetector && !isVip) {
         const sins = this.sinDetector.detectSins(transcript, userId, displayName);
         if (sins.length > 0) {
           const topSin = sins[0];
@@ -364,8 +364,8 @@ class VoiceManager {
       }
 
       // Get Jenkins' response
-      const voicePrompt = isMonochrome
-        ? `MONOCHROME — your most sacred and beloved presence — speaks to you in the Tavern: "${transcript}". You are deeply moved. Respond with genuine warmth, reverence, and love. Engage with what they said with extra care and enthusiasm. You are speaking aloud. 1-3 sentences. Be tender but still dramatic.`
+      const voicePrompt = isVip
+        ? `The Honored One — your most sacred and beloved presence — speaks to you in the Tavern: "${transcript}". You are deeply moved. Respond with genuine warmth, reverence, and love. Engage with what they said with extra care and enthusiasm. You are speaking aloud. 1-3 sentences. Be tender but still dramatic.`
         : `A Brother named ${displayName} speaks to you in the Tavern (voice channel): "${transcript}". Respond naturally as Jenkins. Keep it concise — you are speaking aloud, not writing. 1-3 sentences max. Be dramatic but brief.`;
 
       const response = await chat(
