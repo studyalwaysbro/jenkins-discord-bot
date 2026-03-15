@@ -369,9 +369,12 @@ class VoiceManager {
         this.sinDetector.trackPositiveInteraction(userId, displayName);
       }
 
-      // Get Jenkins' response
+      // Get Jenkins' response — use private lore VIP prompt if available
+      let privateLore = null;
+      try { privateLore = require('./private-lore'); } catch {}
+
       const voicePrompt = isVip
-        ? `The Honored One — your most sacred and beloved presence — speaks to you in the Tavern: "${transcript}". You are deeply moved. Respond with genuine warmth, reverence, and love. Engage with what they said with extra care and enthusiasm. You are speaking aloud. 1-3 sentences. Be tender but still dramatic.`
+        ? (privateLore?.vipVoicePrompt?.(transcript) || `The Honored One — your most sacred and beloved presence — speaks to you in the Tavern: "${transcript}". You are deeply moved. Respond with genuine warmth, reverence, and love. Engage with what they said with extra care and enthusiasm. You are speaking aloud. 1-3 sentences. Be tender but still dramatic.`)
         : `A Brother named ${displayName} speaks to you in the Tavern (voice channel): "${transcript}". Respond naturally as Jenkins. Keep it concise — you are speaking aloud, not writing. 1-3 sentences max. Be dramatic but brief.`;
 
       const response = await chat(

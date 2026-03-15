@@ -10,6 +10,9 @@ node_modules/
 bot.log
 sin-ledger.json
 
+# Private lore overlay (your personal Lodge lore — NEVER commit)
+private-lore.js
+
 # IDE / Editor
 .claude/
 .vscode/
