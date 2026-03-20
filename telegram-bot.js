@@ -43,24 +43,24 @@ console.log('Sin detection system online. The All-Seeing Eye watches Telegram.')
 
 // --- Activity Tracker for hot takes (Telegram-tuned: higher chance) ---
 const activityTracker = new ActivityTracker();
-// Override hot take chance for Telegram (15% instead of 8%)
-const TELEGRAM_HOT_TAKE_CHANCE = 0.15;
-console.log('Activity tracker online. Hot takes armed for Telegram (15% chance).');
+// Override hot take chance for Telegram (6% — slightly less than Discord's 8%)
+const TELEGRAM_HOT_TAKE_CHANCE = 0.06;
+console.log('Activity tracker online. Hot takes armed for Telegram (6% chance).');
 
 // --- Cooldown tracking ---
 const userCooldowns = new Map(); // userId -> timestamp
 const USER_COOLDOWN = 10 * 1000; // 10 seconds per user
 
-// --- Telegram-tuned settings (more talkative since text-only, no audio) ---
-const STAVROS_BREAK_CHANCE = 0.04;          // 4% per message (up from 1.5%)
-const STAVROS_COOLDOWN = 15 * 60 * 1000;    // 15 min cooldown between Stavros breaks
-const NON_RIVAL_RESPONSE_CHANCE = 0.15;     // 15% chance to respond to non-rivals in Jenkins chat
-const JENKINS_CHANNEL_RESPONSE_CHANCE = 0.45; // 45% in designated chat (higher than Discord for text-only)
+// --- Telegram-tuned settings (toned down to avoid spam, stay quality) ---
+const STAVROS_BREAK_CHANCE = 0.015;         // 1.5% per message (same as Discord)
+const STAVROS_COOLDOWN = 30 * 60 * 1000;    // 30 min cooldown between Stavros breaks
+const NON_RIVAL_RESPONSE_CHANCE = 0.07;     // 7% chance to respond to non-rivals in Jenkins chat
+const JENKINS_CHANNEL_RESPONSE_CHANCE = 0.25; // 25% in designated chat (quality over quantity)
 let lastStavrosBreak = 0;
 
-// --- Autonomous Preaching (more frequent for Telegram) ---
-const PREACH_INTERVAL_MIN = 30 * 60 * 1000;  // 30 minutes (down from 45)
-const PREACH_INTERVAL_MAX = 90 * 60 * 1000;  // 90 minutes (down from 120)
+// --- Autonomous Preaching (less frequent, more impactful) ---
+const PREACH_INTERVAL_MIN = 60 * 60 * 1000;  // 60 minutes
+const PREACH_INTERVAL_MAX = 150 * 60 * 1000; // 2.5 hours
 
 // --- React Lord trigger patterns (from alter-egos.js) ---
 const REACT_LORD_TRIGGERS = [

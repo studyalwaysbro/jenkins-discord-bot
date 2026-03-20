@@ -8,6 +8,8 @@ node_modules/
 
 # Runtime data
 bot.log
+telegram-bot.log
+*.log
 sin-ledger.json
 
 # Private lore overlay (your personal Lodge lore — NEVER commit)

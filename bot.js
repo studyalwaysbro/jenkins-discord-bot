@@ -67,8 +67,9 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMessageReactions,
   ],
-  partials: [Partials.Channel], // Required for DMs
+  partials: [Partials.Channel, Partials.Message, Partials.Reaction], // Required for DMs + reaction roles
 });
 
 // --- Cooldown tracking ---
@@ -469,14 +470,18 @@ client.on(Events.MessageCreate, async (message) => {
     }
   }
 
-  // --- Activity Tracking (for hot takes) ---
-  if (message.guild) {
+  // --- Determine if this is a Jenkins-relevant channel ---
+  const isJenkinsChannel = ANNOUNCEMENT_CHANNEL_ID && message.channel.id === ANNOUNCEMENT_CHANNEL_ID;
+  const isJenkinsRelevant = isJenkinsChannel || isMentioned || isDM;
+
+  // --- Activity Tracking (for hot takes — Jenkins channel only) ---
+  if (message.guild && isJenkinsChannel) {
     activityTracker.recordMessage(message.author.id, message.channel.id);
   }
 
-  // --- Sin Detection: The All-Seeing Eye watches ALL channels (VIP is beyond sin) ---
+  // --- Sin Detection: Only in Jenkins channel (don't pollute other channels) ---
   const isVipUser = currentVipMsg && message.author.id === currentVipMsg;
-  if (message.guild && !content.startsWith('!') && !isVipUser) {
+  if (message.guild && isJenkinsChannel && !content.startsWith('!') && !isVipUser) {
     const sins = sinDetector.detectSins(content, message.author.id, message.author.displayName || message.author.username);
     if (sins.length > 0) {
       const topSin = sins[0]; // Most severe sin
@@ -509,8 +514,8 @@ client.on(Events.MessageCreate, async (message) => {
     }
   }
 
-  // --- Hot Takes & Stavros Breaks: Activity-triggered comedy drops ---
-  if (message.guild && !content.startsWith('!')) {
+  // --- Hot Takes & Stavros Breaks: Jenkins channel only ---
+  if (message.guild && isJenkinsChannel && !content.startsWith('!')) {
     // Hot take: political pundit → comedy (requires active chat)
     if (activityTracker.shouldDropHotTake(message.channel.id)) {
       const hotTake = await generateHotTake(deepseek, SYSTEM_PROMPT);
@@ -530,7 +535,6 @@ client.on(Events.MessageCreate, async (message) => {
   }
 
   // --- Jenkins channel: respond to EVERYTHING (he lives here) ---
-  const isJenkinsChannel = ANNOUNCEMENT_CHANNEL_ID && message.channel.id === ANNOUNCEMENT_CHANNEL_ID;
   if (isJenkinsChannel && !content.startsWith('!') && !isMentioned) {
     // Jenkins responds to most messages in his channel, but not every single one
     if (Math.random() < 0.7) { // 70% chance to respond
@@ -548,12 +552,34 @@ client.on(Events.MessageCreate, async (message) => {
         `A Brother named ${message.author.displayName || message.author.username} has spoken in your sacred channel: "${content}". Respond naturally as Jenkins. You can be wild, funny, prophetic, or wise. React to what they said. This is YOUR channel — you are free here. Keep it relatively short.`
       );
 
-      const prefix = (channelAlter.name !== 'Jenkins Prime' && isRivalInChannel)
+      const prefix = (channelAlter.name !== 'Jenkins Prime')
         ? `*[${channelAlter.name} has surfaced]*\n\n`
         : '';
       return message.reply(prefix + response).catch(() => {});
     }
     return; // 30% chance Jenkins stays silent (even gods rest)
+  }
+
+  // --- Name invocation: someone said "Jenkins" with a question/comment in ANY channel ---
+  const saidJenkins = /\bjenkins\b/i.test(content) && !isMentioned && !isJenkinsChannel;
+  if (saidJenkins && message.guild) {
+    // Only respond if the message is substantial (not just "jenkins" alone or a passing mention)
+    const stripped = content.replace(/\bjenkins\b/gi, '').trim();
+    if (stripped.length > 5) { // Must have something meaningful beyond just the name
+      if (isOnCooldown(userCooldowns, message.author.id, USER_COOLDOWN)) return;
+
+      try {
+        await message.channel.sendTyping();
+        const response = await chat(
+          deepseek,
+          SYSTEM_PROMPT,
+          `A Brother named ${message.author.displayName || message.author.username} has invoked your name in #${message.channel.name}. They said: "${content}". They are calling on you specifically — respond to what they said. Be yourself: funny, wise, dramatic, or helpful depending on what they need. Keep it focused and relevant to their message. 1-3 sentences.`
+        );
+        return message.reply(response).catch(() => {});
+      } catch (err) {
+        console.error('[MSG] Jenkins name-invoke error:', err.message);
+      }
+    }
   }
 
   // --- @mention or DM conversation ---
@@ -583,7 +609,7 @@ client.on(Events.MessageCreate, async (message) => {
       `A Brother named ${message.author.displayName || message.author.username} speaks to you in the Lodge: "${userMessage || 'They seek your attention without words.'}"`
     );
 
-    const prefix = (directAlter.name !== 'Jenkins Prime' && isRivalDirect)
+    const prefix = (directAlter.name !== 'Jenkins Prime')
       ? `*[${directAlter.name} has surfaced]*\n\n`
       : '';
     return message.reply(prefix + response).catch(() => {});
@@ -601,6 +627,52 @@ client.on('error', (err) => {
 
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled rejection:', err);
+});
+
+// --- Reaction Roles ---
+const REACTION_ROLE_MESSAGE = process.env.REACTION_ROLE_MESSAGE_ID || '';
+const REACTION_ROLE_MAP = {
+  '📈': process.env.ROLE_BULL || '',
+  '📉': process.env.ROLE_BEAR || '',
+  '💎': process.env.ROLE_DIAMOND_HANDS || '',
+  '🦍': process.env.ROLE_APE || '',
+  '📊': process.env.ROLE_MARKET_MAKER || '',
+  '⚖️': process.env.ROLE_JUROR || '',
+  '🎮': process.env.ROLE_DEGEN || '',
+};
+
+client.on(Events.MessageReactionAdd, async (reaction, user) => {
+  if (user.bot) return;
+  if (reaction.message.id !== REACTION_ROLE_MESSAGE) return;
+  if (reaction.partial) await reaction.fetch();
+
+  const roleId = REACTION_ROLE_MAP[reaction.emoji.name];
+  if (!roleId) return;
+
+  try {
+    const member = await reaction.message.guild.members.fetch(user.id);
+    await member.roles.add(roleId);
+    console.log(`[Reaction Role] +${reaction.emoji.name} → ${user.username}`);
+  } catch (e) {
+    console.error('[Reaction Role] Add failed:', e.message);
+  }
+});
+
+client.on(Events.MessageReactionRemove, async (reaction, user) => {
+  if (user.bot) return;
+  if (reaction.message.id !== REACTION_ROLE_MESSAGE) return;
+  if (reaction.partial) await reaction.fetch();
+
+  const roleId = REACTION_ROLE_MAP[reaction.emoji.name];
+  if (!roleId) return;
+
+  try {
+    const member = await reaction.message.guild.members.fetch(user.id);
+    await member.roles.remove(roleId);
+    console.log(`[Reaction Role] -${reaction.emoji.name} → ${user.username}`);
+  } catch (e) {
+    console.error('[Reaction Role] Remove failed:', e.message);
+  }
 });
 
 // --- The Awakening ---
