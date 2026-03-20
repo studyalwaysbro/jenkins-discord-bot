@@ -71,7 +71,8 @@ const ALTER_EGOS = {
 
 // Weighted random selection
 function pickAlterEgo(isRival = false) {
-  if (!isRival) return ALTER_EGOS.jenkins_prime;
+  // Non-rivals: 25% chance to get an alter ego, otherwise Jenkins Prime
+  if (!isRival && Math.random() > 0.25) return ALTER_EGOS.jenkins_prime;
 
   const egos = Object.values(ALTER_EGOS);
   const totalWeight = egos.reduce((sum, ego) => sum + ego.weight, 0);
@@ -93,7 +94,8 @@ const lastAlterPerUser = new Map();
  * If the message content matches a trigger for a specific ego, that ego gets boosted.
  */
 function pickAlterEgoForUser(userId, isRival = false, messageContent = '') {
-  if (!isRival) return ALTER_EGOS.jenkins_prime;
+  // Non-rivals: 25% chance to get an alter ego (rivals always get one)
+  if (!isRival && Math.random() > 0.25) return ALTER_EGOS.jenkins_prime;
 
   // Check if message content triggers a specific ego
   if (messageContent) {
