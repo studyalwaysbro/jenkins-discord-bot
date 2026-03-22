@@ -3,10 +3,10 @@
 //  "The Architect immortalizes only the worthy."
 // ═══════════════════════════════════════════════════════════════
 
-const fs = require('fs');
 const path = require('path');
 const { EmbedBuilder } = require('discord.js');
 const log = require('./logger').child('Starboard');
+const { safeWriteJSON, safeReadJSON } = require('./safe-write');
 
 const DATA_FILE = path.join(__dirname, 'data', 'starboard.json');
 const STAR_EMOJI = '⭐';
@@ -21,20 +21,11 @@ class Starboard {
   }
 
   load() {
-    try {
-      const dir = path.dirname(DATA_FILE);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8'));
-    } catch (e) {}
-    return { starred: {} }; // messageId -> { starboardMsgId, stars, authorId }
+    return safeReadJSON(DATA_FILE, { starred: {} });
   }
 
   save() {
-    try {
-      const dir = path.dirname(DATA_FILE);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(DATA_FILE, JSON.stringify(this.data, null, 2));
-    } catch (e) { log.error({ err: e }, 'Save error'); }
+    safeWriteJSON(DATA_FILE, this.data);
   }
 
   async handleReaction(reaction, user) {

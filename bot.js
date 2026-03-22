@@ -34,6 +34,7 @@ const {
   PRIVATE_LORE,
 } = require('./personality');
 
+const { PrunedMap } = require('./safe-write');
 const log = require('./logger').child('Bot');
 
 // --- Configuration ---
@@ -106,6 +107,12 @@ const dreamJournal = new DreamJournal(deepseek, SYSTEM_PROMPT, {
   mood, sinDetector, economy, starboard, gameNight, predictions, sermons,
 });
 
+// Wire voice manager to dream journal and mood system
+if (voiceManager) {
+  voiceManager.setDreamJournal(dreamJournal);
+  voiceManager.setMood(mood);
+}
+
 // --- Mood → SFX bridge: play sounds on mood transitions ---
 mood.onTransition = (fromMood, toMood, trigger) => {
   if (!soundEffects || !voiceManager) return;
@@ -119,7 +126,18 @@ mood.onTransition = (fromMood, toMood, trigger) => {
 
 // --- Helper: get mood-aware system prompt ---
 function getActivePrompt() {
-  return SYSTEM_PROMPT + '\n\n' + mood.getMoodOverlay();
+  let prompt = SYSTEM_PROMPT + '\n\n' + mood.getMoodOverlay();
+
+  // Inject last dream context so Jenkins can reference it naturally
+  const lastDream = dreamJournal.data.dreams[dreamJournal.data.dreams.length - 1];
+  if (lastDream) {
+    const daysSince = Math.round((Date.now() - lastDream.timestamp) / 86400000);
+    if (daysSince <= 3) {
+      prompt += `\n\nLAST DREAM (${daysSince === 0 ? 'last night' : daysSince + ' days ago'}): "${lastDream.content.substring(0, 300)}..." — You can reference this dream naturally if it's relevant to the conversation. Don't force it.`;
+    }
+  }
+
+  return prompt;
 }
 
 // --- Welcome System Configuration ---
@@ -150,8 +168,8 @@ const client = new Client({
 
 // --- Cooldown tracking ---
 let lastVipPresence = 0;
-const vipMessageCooldowns = new Map(); // channelId -> timestamp
-const userCooldowns = new Map(); // userId -> timestamp
+const vipMessageCooldowns = new PrunedMap(3600000, 86400000); // prune hourly, expire after 24h
+const userCooldowns = new PrunedMap(3600000, 86400000);
 
 const PRESENCE_COOLDOWN = 30 * 60 * 1000; // 30 minutes
 const STAVROS_COOLDOWN = 20 * 60 * 1000;  // 20 minutes between Stavros breaks
@@ -784,6 +802,12 @@ client.on(Events.MessageCreate, async (message) => {
 
         // Track for dreams
         dreamJournal.trackSermonTopic(topic);
+
+        // Achievement check after sermon
+        const newAch = achievements.check(message.author.id);
+        for (const ach of newAch) {
+          message.channel.send({ embeds: [achievements.unlockEmbed(ach, message.author.displayName || message.author.username)] });
+        }
         break;
       }
 
@@ -1056,7 +1080,15 @@ client.on(Events.MessageCreate, async (message) => {
       case 'accept': {
         const result = duels.accept(message.author.id);
         if (!result.success) return message.reply(result.message);
-        return message.reply({ embeds: [duels.resultEmbed(result, message.guild)] });
+        await message.reply({ embeds: [duels.resultEmbed(result, message.guild)] });
+
+        // Achievement check for both duelists
+        const winAch = achievements.check(result.winnerId);
+        const loseAch = achievements.check(result.loserId);
+        for (const ach of [...winAch, ...loseAch]) {
+          message.channel.send({ embeds: [achievements.unlockEmbed(ach, ach.name)] });
+        }
+        break;
       }
 
       case 'decline': {
@@ -1104,7 +1136,22 @@ client.on(Events.MessageCreate, async (message) => {
         if (!marketId || !winOption) return message.reply('Usage: `!resolve <market-ID> <winning-option#>` (creator only)');
         const result = predictions.resolve(marketId, winOption, message.author.id);
         if (!result.success) return message.reply(result.message);
-        return message.reply({ embeds: [predictions.payoutEmbed(result, message.guild)] });
+        await message.reply({ embeds: [predictions.payoutEmbed(result, message.guild)] });
+
+        // Achievement check for all prediction participants
+        if (result.payouts) {
+          const checkedIds = new Set();
+          for (const p of result.payouts) {
+            if (!checkedIds.has(p.userId)) {
+              checkedIds.add(p.userId);
+              const pAch = achievements.check(p.userId);
+              for (const ach of pAch) {
+                message.channel.send({ embeds: [achievements.unlockEmbed(ach, ach.name)] });
+              }
+            }
+          }
+        }
+        break;
       }
 
       // ── STARBOARD & VOICE COMMANDS ──
@@ -1267,7 +1314,7 @@ client.on(Events.MessageCreate, async (message) => {
       // Alter ego for rivals even in Jenkins channel
       const isRivalInChannel = sinDetector.rivalIds.has(message.author.id);
       const channelAlter = pickAlterEgoForUser(message.author.id, isRivalInChannel, content);
-      const channelPrompt = buildAlterPrompt(SYSTEM_PROMPT, channelAlter);
+      const channelPrompt = buildAlterPrompt(getActivePrompt(), channelAlter);
 
       const response = await chat(
         deepseek,
@@ -1295,7 +1342,7 @@ client.on(Events.MessageCreate, async (message) => {
         await message.channel.sendTyping();
         const response = await chat(
           deepseek,
-          SYSTEM_PROMPT,
+          getActivePrompt(),
           `A Brother named ${message.author.displayName || message.author.username} has invoked your name in #${message.channel.name}. They said: "${content}". They are calling on you specifically — respond to what they said. Be yourself: funny, wise, dramatic, or helpful depending on what they need. Keep it focused and relevant to their message. 1-3 sentences.`
         );
         return message.reply(response).catch(() => {});
@@ -1324,7 +1371,7 @@ client.on(Events.MessageCreate, async (message) => {
     // Alter ego for rivals in direct conversation too
     const isRivalDirect = sinDetector.rivalIds.has(message.author.id);
     const directAlter = pickAlterEgoForUser(message.author.id, isRivalDirect, userMessage);
-    const directPrompt = buildAlterPrompt(SYSTEM_PROMPT, directAlter);
+    const directPrompt = buildAlterPrompt(getActivePrompt(), directAlter);
 
     const response = await chat(
       deepseek,

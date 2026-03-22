@@ -1,8 +1,8 @@
 // sins.js — The All-Seeing Eye: Sin Detection & Divine Judgment System
 
-const fs = require('fs');
 const path = require('path');
 const { chat } = require('./deepseek');
+const { safeWriteJSON, safeReadJSON } = require('./safe-write');
 
 const LEDGER_PATH = path.join(__dirname, 'sin-ledger.json');
 const log = require('./logger').child('Sins');
@@ -289,23 +289,11 @@ class SinDetector {
   // ── Ledger Persistence ──
 
   loadLedger() {
-    try {
-      if (fs.existsSync(LEDGER_PATH)) {
-        const data = fs.readFileSync(LEDGER_PATH, 'utf-8');
-        return JSON.parse(data);
-      }
-    } catch (e) {
-      log.error({ err: e }, 'Failed to load sin ledger');
-    }
-    return {};
+    return safeReadJSON(LEDGER_PATH, {});
   }
 
   saveLedger() {
-    try {
-      fs.writeFileSync(LEDGER_PATH, JSON.stringify(this.ledger, null, 2));
-    } catch (e) {
-      log.error({ err: e }, 'Failed to save sin ledger');
-    }
+    safeWriteJSON(LEDGER_PATH, this.ledger);
   }
 
   // ── Detection ──

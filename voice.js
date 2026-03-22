@@ -379,7 +379,14 @@ class VoiceManager {
     this.sessionSpeechCount = 0;
     this.noiseTypeStats = {};
     this.userErrorCooldowns = new Map();
+
+    // ── External system references (set after construction) ──
+    this.dreamJournal = null;
+    this.mood = null;
   }
+
+  setDreamJournal(dj) { this.dreamJournal = dj; }
+  setMood(moodSystem) { this.mood = moodSystem; }
 
   // ═══════════════════════════════════════════════════════════════
   // Join / Leave / Cleanup
@@ -454,6 +461,7 @@ class VoiceManager {
 
     // Auto-wake on join so first interaction is immediate
     this.wakeSleep.wake(guildId);
+    if (this.mood) this.mood.nudge('energy', 5, 'voice_wake');
 
     return null;
   }
@@ -679,6 +687,7 @@ class VoiceManager {
       if (freshWake) {
         this.memory.clear(guildId); // Fresh context on wake
       }
+      if (this.mood) this.mood.nudge('energy', 5, 'voice_wake');
       timer.set('wakeState', 'WOKE UP');
 
       // Fall through to full pipeline with the transcript we already have
@@ -717,6 +726,7 @@ class VoiceManager {
     // Check for sleep commands
     if (SLEEP_COMMANDS.test(transcript)) {
       this.wakeSleep.sleep(guildId);
+      if (this.mood) this.mood.onQuietPeriod();
       this.memory.clear(guildId);
       await this.speakText(guildId, 'The Architect retreats into slumber. Call my name to summon me again.');
       timer.set('wakeState', 'SLEEP command');
@@ -894,6 +904,13 @@ class VoiceManager {
 
     // ── Store conversation turn for context ──
     this.memory.addTurn(guildId, displayName, transcript, cleanResponse);
+
+    // ── Track voice activity in dream journal ──
+    if (this.dreamJournal) {
+      this.dreamJournal.trackVoiceConversation();
+      const durationSec = pcmBuffer.length / 96000;
+      if (durationSec > 0) this.dreamJournal.trackVoiceMinutes(Math.ceil(durationSec / 60));
+    }
 
     // ── Report latency ──
     const report = timer.report();

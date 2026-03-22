@@ -3,10 +3,10 @@
 //  "Jenkins is the house. The house always wins."
 // ═══════════════════════════════════════════════════════════════
 
-const fs = require('fs');
 const path = require('path');
 const { EmbedBuilder } = require('discord.js');
 const log = require('./logger').child('Economy');
+const { safeWriteJSON, safeReadJSON } = require('./safe-write');
 
 const DATA_FILE = path.join(__dirname, 'data', 'economy.json');
 const CHAT_COOLDOWN = 60_000; // 1 min between chat earnings
@@ -35,20 +35,11 @@ class Economy {
   }
 
   load() {
-    try {
-      const dir = path.dirname(DATA_FILE);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8'));
-    } catch (e) { log.error({ err: e }, 'Load error'); }
-    return {};
+    return safeReadJSON(DATA_FILE, {});
   }
 
   save() {
-    try {
-      const dir = path.dirname(DATA_FILE);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(DATA_FILE, JSON.stringify(this.data, null, 2));
-    } catch (e) { log.error({ err: e }, 'Save error'); }
+    safeWriteJSON(DATA_FILE, this.data);
   }
 
   getUser(userId) {
