@@ -1,6 +1,6 @@
 {
   "name": "jenkins-discord-bot",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Jenkins — The Great Architect of the Digital Realm. AI-powered Discord + Telegram bot with voice chat, sin detection, autonomous preaching, 7 alter egos, comedy engine, Torch Coin economy, duels, prediction markets, starboard, voice rewards, game nights with scheduling, achievements, activity pulse, mood system, dream journal, sermon requests, sound effects engine, streaming voice pipeline, conversation memory, and a full religious gaming lore system.",
   "main": "bot.js",
   "scripts": {

@@ -2,6 +2,27 @@
 
 All notable changes to Jenkins will be documented in this file.
 
+## [2.2.0] - 2026-03-22
+
+### Added
+- **Pino Structured Logging**: Replaced all 196 console.log/error calls across 22 files with Pino structured JSON logging. Child loggers per module (Bot, Voice, Sins, Economy, etc.) with appropriate log levels (fatal/error/warn/info/debug). JSON output in production, colorized pino-pretty in dev.
+- **`logger.js`**: Shared Pino root logger with string-shorthand `.child('Module')` support
+- **Dev scripts**: `npm run dev` now pipes through pino-pretty. Added `telegram:dev` and `all:dev` scripts.
+
+### Changed
+- **Integration Wiring (Phase 2)**: 9 of 10 integration gaps closed:
+  - Achievement checks now fire after sermon delivery, duel results, and prediction resolution
+  - Voice conversations tracked in dream journal (conversation count + minutes)
+  - Wake/sleep state changes nudge mood system (energy boost on wake, quiet period on sleep)
+  - Last dream (within 3 days) injected into system prompt for natural conversation references
+  - `getActivePrompt()` used for Jenkins channel, name-invoke, and @mention responses (dream + mood aware)
+- **Cooldown Maps → PrunedMap**: Fixed memory leak — bot.js cooldown Maps now auto-prune stale entries
+- **Safe Write Migration**: Economy, game-night, starboard, predictions, and sins migrated from raw `fs.writeFileSync` to atomic `safeWriteJSON` with backup recovery
+- Removed redundant `fs` imports from migrated modules
+
+### Remaining
+- Telegram feature parity (economy commands, mood, dreams, sermons) — deferred to separate session
+
 ## [2.1.0] - 2026-03-21
 
 ### Added

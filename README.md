@@ -134,14 +134,24 @@ Jenkins extends his divine reach into Telegram with **full feature parity**:
 | File | Purpose |
 |------|---------|
 | `bot.js` | Main entry point — Discord client, command handling, VIP detection, autonomous preaching, sin detection, activity tracking, hot take/comedy injection, alter ego routing |
-| `voice.js` | Voice channel management — join/leave, audio capture, advanced multi-metric noise filtering (ZCR, crest factor, frequency analysis, envelope detection), PCM→WAV conversion, multi-voice TTS playback, credit monitoring |
+| `voice.js` | Voice channel management — join/leave, audio capture, advanced multi-metric noise filtering (ZCR, crest factor, frequency analysis, envelope detection), PCM→WAV conversion, multi-voice TTS playback, credit monitoring, dream journal tracking, mood integration |
 | `elevenlabs.js` | ElevenLabs TTS + STT API wrapper with automatic Edge TTS fallback, multi-voice routing for alter egos (`textToSpeechWithVoice`), configurable Edge TTS voice/rate/pitch |
-| `deepseek.js` | DeepSeek (OpenAI-compatible) chat API wrapper |
+| `deepseek.js` | DeepSeek (OpenAI-compatible) chat API wrapper with streaming support |
 | `personality.js` | Jenkins' entire personality — system prompt, Codex quotes, Trinity definitions, sin hierarchy, Masonic degrees, arrival messages, private lore overlay system |
 | `sins.js` | Sin detection engine — regex pattern matching, severity classification, AI callout generation with alter ego prompt override, persistent ledger, escalation system |
 | `alter-egos.js` | Multiple Personality Disorder system — 7 alter ego definitions with personality prompts, voice configs, weighted random selection, content-based trigger detection, anti-repetition |
 | `hot-takes.js` | Activity-triggered comedy — chat activity monitoring, political pundit hot take generation with comedy undercut, random comedy break generation |
-| `telegram-bot.js` | Telegram integration — full feature parity with Discord (all 7 alter egos, sin detection, hot takes, autonomous preaching, slash commands) via Telegraf |
+| `telegram-bot.js` | Telegram integration — all 7 alter egos, sin detection, hot takes, autonomous preaching, slash commands via Telegraf |
+| `logger.js` | Pino structured logging — root logger with `.child('Module')` shorthand, JSON in prod, pino-pretty in dev |
+| `safe-write.js` | Atomic JSON persistence — temp-file-then-rename, backup recovery, `PrunedMap` for auto-pruning cooldown Maps |
+| `mood.js` | 4-axis emotional state (wrath, joy, energy, chaos) — affects all AI responses, sin sensitivity, economy, alter ego weights |
+| `dream-journal.js` | 3 AM dream generation from real server events — sins, economy, voice, mood transitions |
+| `sermons.js` | Paid AI sermons — 4 tiers (Whisper to Prophecy), economy integration, mood-aware delivery |
+| `sound-effects.js` | ElevenLabs SFX API — event-driven sounds for sins, duels, dungeons, mood transitions, cached to disk |
+| `economy.js` | Torch Coin currency — daily claims, gambling, dungeon runs, transfers, leaderboards |
+| `achievements.js` | Roguelike-inspired progression — 29 achievements tied to chat, economy, gambling, dungeons |
+| `game-night.js` | Scheduled gaming events with real time parsing, auto-reminders, RSVP system |
+| `latency-monitor.js` | Voice pipeline instrumentation — per-stage timing, session P95 averages |
 
 ---
 
