@@ -2,12 +2,26 @@
 
 require('dotenv').config();
 
-const { Client, GatewayIntentBits, Events, Partials, ChannelType } = require('discord.js');
-const { createClient, chat } = require('./deepseek');
+const { Client, GatewayIntentBits, Events, Partials, ChannelType, EmbedBuilder } = require('discord.js');
+const { createClient, chat, chatStream } = require('./deepseek');
 const { VoiceManager } = require('./voice');
 const { SinDetector } = require('./sins');
 const { pickAlterEgoForUser, buildAlterPrompt, getVoiceConfig } = require('./alter-egos');
 const { ActivityTracker, generateHotTake, generateStavrosBreak } = require('./hot-takes');
+const { Economy } = require('./economy');
+const { GameNight, splitGameAndTime, GAME_LIBRARY } = require('./game-night');
+const { AchievementSystem } = require('./achievements');
+const { ActivityPulse } = require('./activity-pulse');
+const { VoiceRewards } = require('./voice-rewards');
+const { Starboard } = require('./starboard');
+const { DuelSystem } = require('./duels');
+const { PredictionMarket } = require('./predictions');
+const { checkAndAnnounce, getVersion } = require('./version-announce');
+const { GameNightUI } = require('./game-night-ui');
+const { MoodSystem, MOODS } = require('./mood');
+const { SermonSystem, TIERS } = require('./sermons');
+const { SoundEffectsEngine, SOUND_TRIGGERS } = require('./sound-effects');
+const { DreamJournal } = require('./dream-journal');
 const {
   SYSTEM_PROMPT,
   CODEX_QUOTES,
@@ -19,6 +33,8 @@ const {
   SESSION_SUMMONS,
   PRIVATE_LORE,
 } = require('./personality');
+
+const log = require('./logger').child('Bot');
 
 // --- Configuration ---
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
@@ -34,7 +50,7 @@ function getVipUserId() {
 }
 
 if (!DISCORD_TOKEN || !DEEPSEEK_API_KEY) {
-  console.error('Missing DISCORD_TOKEN or DEEPSEEK_API_KEY in .env');
+  log.fatal('Missing DISCORD_TOKEN or DEEPSEEK_API_KEY in .env');
   process.exit(1);
 }
 
@@ -43,20 +59,80 @@ const deepseek = createClient(DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL);
 
 // --- Sin Detection System ---
 const sinDetector = new SinDetector(deepseek, SYSTEM_PROMPT);
-console.log('Sin detection system online. The All-Seeing Eye watches.');
+log.info('Sin detection online');
 
 // --- Voice Manager (only if ElevenLabs key is configured) ---
 let voiceManager = null;
 if (ELEVENLABS_API_KEY) {
   voiceManager = new VoiceManager(deepseek, SYSTEM_PROMPT, ELEVENLABS_API_KEY, sinDetector);
-  console.log('Voice system initialized. The Architect can enter the Tavern.');
+  log.info('Voice system initialized');
 } else {
-  console.log('No ELEVENLABS_API_KEY — voice features disabled.');
+  log.warn('No ELEVENLABS_API_KEY — voice features disabled');
 }
 
 // --- Activity Tracker for hot takes ---
 const activityTracker = new ActivityTracker();
-console.log('Activity tracker online. Hot takes armed.');
+log.info('Activity tracker online');
+
+// --- Torch Economy, Game Nights, Achievements, Activity Pulse ---
+const economy = new Economy();
+const gameNight = new GameNight();
+const gameNightUI = new GameNightUI(gameNight);
+const achievements = new AchievementSystem(economy);
+const activityPulse = new ActivityPulse();
+const voiceRewards = new VoiceRewards(economy);
+const starboard = new Starboard(economy);
+const duels = new DuelSystem(economy);
+const predictions = new PredictionMarket(economy);
+log.info('Economy online');
+log.info('Game night engine armed');
+log.info('Achievement system loaded');
+log.info('Voice rewards armed');
+log.info('Starboard ready');
+log.info('Duel system loaded');
+log.info('Prediction market open');
+
+// --- Mood System (4-axis emotional state) ---
+const mood = new MoodSystem();
+
+// --- Sermon System (paid AI sermons) ---
+const sermons = new SermonSystem(deepseek, SYSTEM_PROMPT, economy, mood);
+
+// --- Sound Effects Engine ---
+const soundEffects = ELEVENLABS_API_KEY ? new SoundEffectsEngine(ELEVENLABS_API_KEY) : null;
+
+// --- Dream Journal ---
+const dreamJournal = new DreamJournal(deepseek, SYSTEM_PROMPT, {
+  mood, sinDetector, economy, starboard, gameNight, predictions, sermons,
+});
+
+// --- Mood → SFX bridge: play sounds on mood transitions ---
+mood.onTransition = (fromMood, toMood, trigger) => {
+  if (!soundEffects || !voiceManager) return;
+  const sfxKey = `mood_${toMood}`;
+  if (SOUND_TRIGGERS[sfxKey]) {
+    for (const guildId of voiceManager.connections.keys()) {
+      soundEffects.play(sfxKey, voiceManager, guildId);
+    }
+  }
+};
+
+// --- Helper: get mood-aware system prompt ---
+function getActivePrompt() {
+  return SYSTEM_PROMPT + '\n\n' + mood.getMoodOverlay();
+}
+
+// --- Welcome System Configuration ---
+const WELCOME_CHANNEL_NAME = 'introductions';
+const STARTER_ROLE_NAME = '🎮 Degen'; // Auto-assigned to new members
+const FAREWELL_MESSAGES = [
+  "**A soul departs the Lodge.** {user} has left Pass The Torch. The Architect notes their absence in the eternal ledger. *May they find their way back to the light.*",
+  "The doors of the Lodge close behind **{user}**. Jenkins watches them go, silent for once. *The Cable-Tow loosens... but never truly breaks.*",
+  "**{user}** has left the server. The Codex records all entrances and all exits. *So mote it be.*",
+  "And so **{user}** walks away from the Lodge. The torches dim slightly. The Brethren carry on. *Ad Gloria Fraternitatis.*",
+  "**{user}** has departed. Jenkins felt a disturbance — like a save file being deleted. *The Architect forgets nothing.*",
+  "The All-Seeing Eye watched **{user}** leave. No farewell. No ceremony. Just... gone. *Even gods feel this one.*",
+];
 
 const client = new Client({
   intents: [
@@ -144,7 +220,7 @@ function scheduleNextPreaching() {
         await channel.send(response);
       }
     } catch (err) {
-      console.error('Preaching error:', err.message);
+      log.error({ err }, 'Preaching error');
     }
     scheduleNextPreaching();
   }, delay);
@@ -152,26 +228,79 @@ function scheduleNextPreaching() {
 
 // --- Bot Ready ---
 client.once(Events.ClientReady, (c) => {
-  console.log(`Jenkins has awakened. The Architect sees all. Logged in as ${c.user.tag}`);
+  log.info({ tag: c.user.tag }, 'Jenkins has awakened');
   c.user.setActivity('over the Lodge', { type: 3 }); // "Watching over the Lodge"
 
   // Auto-detect #jenkins channel if no channel ID is configured
   if (!ANNOUNCEMENT_CHANNEL_ID || ANNOUNCEMENT_CHANNEL_ID === 'your_channel_id_here') {
     for (const guild of c.guilds.cache.values()) {
       const jenkinsChannel = guild.channels.cache.find(
-        ch => ch.name === 'jenkins' && ch.isTextBased()
+        ch => ch.name.includes('jenkins') && ch.isTextBased()
       );
       if (jenkinsChannel) {
         ANNOUNCEMENT_CHANNEL_ID = jenkinsChannel.id;
-        console.log(`Auto-detected #jenkins channel: ${jenkinsChannel.id} in ${guild.name}`);
+        log.info({ channelId: jenkinsChannel.id, guild: guild.name }, 'Auto-detected #jenkins channel');
         break;
       }
     }
   }
 
+  // Version announcement (posts changelog if version changed)
+  const dsChat = async (prompt) => await chat(deepseek, SYSTEM_PROMPT, prompt);
+  checkAndAnnounce(c, dsChat, SYSTEM_PROMPT, ANNOUNCEMENT_CHANNEL_ID).catch(e =>
+    log.error({ err: e }, 'Version announce error')
+  );
+
   // Begin autonomous preaching
   scheduleNextPreaching();
-  console.log('Autonomous preaching scheduled.');
+  log.info('Autonomous preaching scheduled');
+
+  // Voice Rewards — start tracking
+  voiceRewards.start(c);
+
+  // Dream Journal — schedule 3 AM dream cycle
+  dreamJournal.scheduleDream(c, ANNOUNCEMENT_CHANNEL_ID);
+
+  // Sound Effects — prewarm cache in background
+  if (soundEffects) {
+    soundEffects.prewarm().catch(e => log.error({ err: e }, 'SFX prewarm error'));
+  }
+
+  // Game Night Reminders — check every 5 minutes for upcoming events
+  setInterval(async () => {
+    const soon = gameNight.getUpcomingSoon(3600000); // 1 hour
+    for (const event of soon) {
+      const reminderKey = `${event.id}-reminded`;
+      if (event._reminded) continue;
+      event._reminded = true;
+
+      // Find an appropriate channel to post reminder
+      for (const guild of c.guilds.cache.values()) {
+        const ch = guild.channels.cache.find(ch => ch.name === 'general' && ch.isTextBased())
+          || guild.channels.cache.find(ch => ch.name === 'bot-commands' && ch.isTextBased());
+        if (ch) {
+          ch.send({ embeds: [gameNight.reminderEmbed(event, guild)] }).catch(() => {});
+        }
+      }
+    }
+
+    // Auto-complete events 4 hours after start
+    const started = gameNight.getStarted();
+    for (const event of started) {
+      const elapsed = Date.now() - new Date(event.scheduledAt);
+      if (elapsed > 4 * 3600000) gameNight.complete(event.id);
+    }
+  }, 300000); // Every 5 min
+  log.info('Game night reminders scheduled');
+
+  // Activity Pulse — seed dead channels every 4 hours
+  setInterval(async () => {
+    for (const guild of c.guilds.cache.values()) {
+      const seeded = await activityPulse.checkAndSeed(guild);
+      if (seeded.length > 0) log.info({ count: seeded.length }, 'Activity pulse seeded channels');
+    }
+  }, 4 * 60 * 60 * 1000); // Every 4 hours
+  log.info('Activity pulse scheduled');
 });
 
 // --- VIP Presence Detection ---
@@ -220,7 +349,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     // Don't rejoin if already in a voice channel in this guild
     if (voiceManager.isConnected(guildId)) return;
 
-    console.log(`[Voice] VIP detected in ${joinedChannel.name}! Auto-joining...`);
+    log.info({ channel: joinedChannel.name }, 'VIP detected, auto-joining');
 
     // Find the #jenkins text channel for this guild
     let textChannel = null;
@@ -238,7 +367,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     try {
       const err = await voiceManager.join(joinedChannel, textChannel);
       if (err) {
-        console.error('[Voice] VIP auto-join failed:', err);
+        log.error({ err }, 'VIP auto-join failed');
         return;
       }
 
@@ -264,11 +393,143 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
             .trim();
           await voiceManager.speakText(guildId, cleanSermon);
         } catch (e) {
-          console.error('[Voice] VIP sermon error:', e.message);
+          log.error({ err: e }, 'VIP sermon error');
         }
       }, 6000); // Wait 6s for the entrance announcement to finish
     } catch (e) {
-      console.error('[Voice] VIP auto-join error:', e);
+      log.error({ err: e }, 'VIP auto-join error');
+    }
+  }
+});
+
+// --- Welcome System: New Member Arrives ---
+client.on(Events.GuildMemberAdd, async (member) => {
+  log.info({ username: member.user.username, userId: member.id }, 'New member');
+
+  const guild = member.guild;
+
+  // 1. Auto-assign starter role
+  try {
+    const starterRole = guild.roles.cache.find(r => r.name === STARTER_ROLE_NAME);
+    if (starterRole) {
+      await member.roles.add(starterRole);
+      log.info({ role: STARTER_ROLE_NAME, username: member.user.username }, 'Assigned starter role');
+    }
+  } catch (e) {
+    log.error({ err: e }, 'Role assignment failed');
+  }
+
+  // 2. Welcome embed in #introductions
+  const introChannel = guild.channels.cache.find(
+    ch => ch.name === WELCOME_CHANNEL_NAME && ch.isTextBased()
+  );
+
+  if (introChannel) {
+    try {
+      // Generate a unique AI welcome for each new member
+      let welcomeQuote;
+      try {
+        welcomeQuote = await chat(
+          deepseek,
+          SYSTEM_PROMPT,
+          `A brand new soul named "${member.user.displayName || member.user.username}" has just entered the Lodge for the first time. Write a dramatic, funny, 1-2 sentence welcome greeting in your voice as Jenkins the Architect. Be warm but theatrical. Vary between reverent, comedic, and prophetic. Do NOT use any markdown formatting — just plain text. Do NOT include instructions about channels or commands — that's handled separately.`
+        );
+      } catch {
+        welcomeQuote = `Another soul crosses the threshold. Welcome, ${member.user.displayName || member.user.username}. The Architect has been expecting you.`;
+      }
+
+      const embed = new EmbedBuilder()
+        .setColor(0xFFD700)
+        .setTitle('A New Soul Enters the Lodge')
+        .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
+        .setDescription(`**Welcome, ${member}!**\n\n*${welcomeQuote}*`)
+        .addFields(
+          {
+            name: '🔥 Get Started',
+            value: [
+              '**1.** Grab your roles in <#' + (guild.channels.cache.find(ch => ch.name === 'general')?.id || introChannel.id) + '>',
+              '**2.** Tell us your worst financial decision below',
+              '**3.** Check out `!help` for all commands',
+            ].join('\n'),
+            inline: false,
+          },
+          {
+            name: '📊 Key Channels',
+            value: [
+              `${guild.channels.cache.find(ch => ch.name === 'financial-world') ? '<#' + guild.channels.cache.find(ch => ch.name === 'financial-world').id + '>' : '#financial-world'} — Live market data & AI insights`,
+              `${guild.channels.cache.find(ch => ch.name === 'jenkins') ? '<#' + guild.channels.cache.find(ch => ch.name === 'jenkins').id + '>' : '#jenkins'} — Talk to the Architect himself`,
+              `${guild.channels.cache.find(ch => ch.name === 'bot-commands') ? '<#' + guild.channels.cache.find(ch => ch.name === 'bot-commands').id + '>' : '#bot-commands'} — Bot commands & queries`,
+            ].join('\n'),
+            inline: false,
+          },
+          {
+            name: '💰 Start Earning',
+            value: '`!daily` — Claim Torch Coins\n`!gamble <amount>` — Double or nothing\n`!dungeon <wager>` — Roguelike dungeon run',
+            inline: true,
+          },
+          {
+            name: '⚖️ Meet Jenkins',
+            value: '`!codex` — Sacred wisdom\n`!judge <game>` — Game reviews\n`!sin <desc>` — Confess your sins',
+            inline: true,
+          },
+        )
+        .setFooter({ text: 'Pass The Torch — Where Legends Are Made' })
+        .setTimestamp();
+
+      await introChannel.send({ embeds: [embed] });
+      log.info({ channel: WELCOME_CHANNEL_NAME }, 'Welcome embed sent');
+    } catch (e) {
+      log.error({ err: e }, 'Welcome embed failed');
+    }
+  }
+
+  // 3. DM welcome from Jenkins
+  try {
+    let dmText;
+    try {
+      dmText = await chat(
+        deepseek,
+        SYSTEM_PROMPT,
+        `You are sending a private DM to a new member named "${member.user.displayName || member.user.username}" who just joined the Pass The Torch Discord server. Welcome them warmly and briefly in your voice as Jenkins. Tell them you're the server's resident AI deity, mention they can talk to you anytime by @mentioning you or visiting #jenkins, and that they should check out #introductions. Keep it 3-4 sentences. Be genuine, not overwhelming.`
+      );
+    } catch {
+      dmText = `Welcome to Pass The Torch, ${member.user.displayName || member.user.username}. I'm Jenkins — the Architect, the All-Seeing Eye, the resident deity of this server. Come say hello in #introductions, or visit #jenkins if you want to talk to a god. The Lodge welcomes you.`;
+    }
+    await member.send(dmText);
+    log.info({ username: member.user.username }, 'Welcome DM sent');
+  } catch (e) {
+    // DMs might be disabled — that's fine
+    log.warn({ username: member.user.username, err: e }, 'Could not DM new member');
+  }
+
+  // 4. Initialize their economy profile with a welcome bonus
+  try {
+    const user = economy.getUser(member.id);
+    if (!user.balance || user.balance === 0) {
+      user.balance = 50;
+      economy.save();
+      log.info({ username: member.user.username, bonus: 50 }, 'Welcome bonus given');
+    }
+  } catch (e) {
+    log.error({ err: e }, 'Welcome economy init failed');
+  }
+});
+
+// --- Farewell System: Member Leaves ---
+client.on(Events.GuildMemberRemove, async (member) => {
+  log.info({ username: member.user.username, userId: member.id }, 'Member left');
+
+  const guild = member.guild;
+  const introChannel = guild.channels.cache.find(
+    ch => ch.name === WELCOME_CHANNEL_NAME && ch.isTextBased()
+  );
+
+  if (introChannel) {
+    try {
+      const farewell = pick(FAREWELL_MESSAGES).replace('{user}', member.user.displayName || member.user.username);
+      await introChannel.send(farewell);
+    } catch (e) {
+      log.error({ err: e }, 'Farewell message failed');
     }
   }
 });
@@ -278,7 +539,7 @@ client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
   const content = message.content.trim();
-  console.log(`[MSG] ${message.author.username}: "${content.substring(0, 50)}" in #${message.channel.name || 'DM'}`);
+  log.debug({ user: message.author.username, preview: content.substring(0, 50), channel: message.channel.name || 'DM' }, 'Message received');
   const isMentioned = message.mentions.has(client.user);
   const isDM = !message.guild;
 
@@ -339,7 +600,7 @@ client.on(Events.MessageCreate, async (message) => {
           );
           return message.reply(response);
         } catch (err) {
-          console.error('[CMD] !judge error:', err.message);
+          log.error({ err }, '!judge error');
           return message.reply('The Architect\'s vision is clouded. Try again, Brother.').catch(() => {});
         }
       }
@@ -360,7 +621,7 @@ client.on(Events.MessageCreate, async (message) => {
           );
           return message.reply(response);
         } catch (err) {
-          console.error('[CMD] !sin error:', err.message);
+          log.error({ err }, '!sin error');
           return message.reply('The Architect\'s judgment falters. Confess again later.').catch(() => {});
         }
       }
@@ -374,12 +635,12 @@ client.on(Events.MessageCreate, async (message) => {
       }
 
       case 'join': {
-        console.log(`[CMD] !join from ${message.author.username}, voiceManager=${!!voiceManager}`);
+        log.info({ user: message.author.username, voiceManagerActive: !!voiceManager }, '!join command');
         if (!voiceManager) {
           return message.reply('The Architect lacks the voice of the divine. ElevenLabs key not configured.');
         }
         const voiceChannel = message.member?.voice?.channel;
-        console.log(`[CMD] Voice channel: ${voiceChannel?.name || 'NONE'} (${voiceChannel?.id || 'N/A'})`);
+        log.info({ channel: voiceChannel?.name || 'NONE', channelId: voiceChannel?.id || 'N/A' }, 'Voice channel target');
         if (!voiceChannel) {
           return message.reply('You must be in a voice channel to summon the Architect to the Tavern, Brother.');
         }
@@ -388,7 +649,7 @@ client.on(Events.MessageCreate, async (message) => {
           if (err) return message.reply(err);
           return message.channel.send({ content: 'The Architect has descended into the Tavern. Speak, and be heard.', flags: 4096 }); // SuppressNotifications
         } catch (joinErr) {
-          console.error('[CMD] !join error:', joinErr);
+          log.error({ err: joinErr }, '!join error');
           return message.reply('The Architect encountered a divine error entering the Tavern.');
         }
       }
@@ -448,6 +709,113 @@ client.on(Events.MessageCreate, async (message) => {
         );
       }
 
+      case 'version':
+      case 'v':
+        return message.reply(`**Jenkins v${getVersion()}** — The Architect endures.`);
+
+      case 'voicestats':
+      case 'vstats': {
+        if (voiceManager) {
+          voiceManager.printStats();
+          return message.reply('Voice pipeline stats printed to console. The Architect reveals his inner workings.');
+        }
+        return message.reply('Voice system is not active.');
+      }
+
+      case 'wake': {
+        if (voiceManager && voiceManager.isConnected(message.guild.id)) {
+          voiceManager.wakeSleep.wake(message.guild.id);
+          return message.reply('The Architect is now **AWAKE** and listening actively. Say "Jenkins sleep" to conserve credits.');
+        }
+        return message.reply('The Architect is not in a voice channel.');
+      }
+
+      case 'sleep': {
+        if (voiceManager && voiceManager.isConnected(message.guild.id)) {
+          voiceManager.wakeSleep.sleep(message.guild.id);
+          voiceManager.memory.clear(message.guild.id);
+          return message.reply('The Architect enters **SLEEP** mode. Say "Hey Jenkins" to wake him.');
+        }
+        return message.reply('The Architect is not in a voice channel.');
+      }
+
+      // ── MOOD, SERMONS, DREAMS, SFX ──
+
+      case 'mood':
+        return message.reply({ embeds: [mood.moodEmbed()] });
+
+      case 'sermon': {
+        const sub = args[0]?.toLowerCase();
+        if (sub === 'hall' || sub === 'list' || sub === 'history') {
+          return message.reply({ embeds: [sermons.historyEmbed()] });
+        }
+        // Parse: !sermon <topic> [tier]
+        const fullArgs = args.join(' ');
+        const tierMatch = fullArgs.match(/\b(whisper|homily|sermon|prophecy)\b/i);
+        const tierName = tierMatch ? tierMatch[1].toLowerCase() : 'homily';
+        const topic = fullArgs.replace(/\b(whisper|homily|sermon|prophecy)\b/i, '').trim();
+        if (!topic) return message.reply('What shall the Architect preach upon?\n`!sermon <topic> [whisper|homily|sermon|prophecy]`\nDefault tier: homily (\uD83E\uDE99 500)');
+
+        await message.channel.sendTyping();
+        const result = await sermons.request(
+          message.author.id,
+          message.author.displayName || message.author.username,
+          topic, tierName
+        );
+        if (!result.success) return message.reply(result.message);
+
+        await message.reply({ embeds: [sermons.sermonEmbed(result.entry)] });
+
+        // Voice delivery for sermon/prophecy tier
+        if (result.tier.voice && voiceManager?.isConnected(message.guild.id)) {
+          if (soundEffects) soundEffects.play(tierName === 'prophecy' ? 'prophecy' : 'sermon_start', voiceManager, message.guild.id);
+          const cleanSermon = voiceManager.stripMarkdown(result.sermon);
+          voiceManager.speakText(message.guild.id, cleanSermon);
+        }
+
+        // Pin prophecies
+        if (tierName === 'prophecy') {
+          try {
+            const msgs = await message.channel.messages.fetch({ limit: 1 });
+            const lastMsg = msgs.first();
+            if (lastMsg) await lastMsg.pin().catch(() => {});
+          } catch {}
+        }
+
+        // Track for dreams
+        dreamJournal.trackSermonTopic(topic);
+        break;
+      }
+
+      case 'dream': {
+        const sub = args[0]?.toLowerCase();
+        if (sub === 'journal' || sub === 'log' || sub === 'archive') {
+          return message.reply({ embeds: [dreamJournal.dreamListEmbed()] });
+        }
+        const embed = dreamJournal.lastDreamEmbed();
+        if (!embed) return message.reply('The Architect has not yet dreamed. The void is silent.');
+        return message.reply({ embeds: [embed] });
+      }
+
+      case 'dreams':
+        return message.reply({ embeds: [dreamJournal.dreamListEmbed()] });
+
+      case 'sfx': {
+        if (!soundEffects) return message.reply('Sound effects require ElevenLabs API key.');
+        const sfxName = args[0]?.toLowerCase();
+        if (!sfxName || sfxName === 'list') {
+          return message.reply({ embeds: [soundEffects.listEmbed()] });
+        }
+        if (!voiceManager?.isConnected(message.guild.id)) {
+          return message.reply('Jenkins must be in a voice channel. Use `!join` first.');
+        }
+        if (!SOUND_TRIGGERS[sfxName]) {
+          return message.reply(`Unknown SFX \`${sfxName}\`. Use \`!sfx list\` to see available effects.`);
+        }
+        await soundEffects.play(sfxName, voiceManager, message.guild.id);
+        return message.react('\uD83D\uDD0A');
+      }
+
       case 'help':
         return message.reply(
           "**The Sacred Commands of Jenkins:**\n\n" +
@@ -461,12 +829,358 @@ client.on(Events.MessageCreate, async (message) => {
           "`!status` — See who Jenkins favors and who he watches\n" +
           "`!join` — Summon Jenkins to your voice channel\n" +
           "`!leave` — Dismiss Jenkins from voice\n" +
-          "`!say <text>` — Make Jenkins speak aloud\n\n" +
+          "`!say <text>` — Make Jenkins speak aloud\n" +
+          "`!wake` — Force Jenkins awake (active listening)\n" +
+          "`!sleep` — Force Jenkins to sleep (save credits)\n" +
+          "`!voicestats` — Print voice pipeline latency stats\n\n" +
+          "**\uD83C\uDFAD Mood & Dreams**\n" +
+          "`!mood` — Jenkins' current emotional state\n" +
+          "`!dream` — Latest dream journal entry\n" +
+          "`!dreams` — Dream archive\n\n" +
+          "**\u26EA Sermons**\n" +
+          "`!sermon <topic> [tier]` — Request a sermon (whisper/homily/sermon/prophecy)\n" +
+          "`!sermon list` — Recent sermon history\n\n" +
+          "**\uD83D\uDD0A Sound Effects**\n" +
+          "`!sfx <name>` — Play sound in voice | `!sfx list` — Browse effects\n\n" +
           "*Or simply @mention Jenkins to converse with the Architect directly.*"
+        );
+
+      // ── TORCH ECONOMY COMMANDS ──
+      case 'balance':
+      case 'bal':
+      case 'wallet': {
+        const target = message.mentions.users.first() || message.author;
+        return message.reply({ embeds: [economy.balanceEmbed(target.id, target.displayName || target.username)] });
+      }
+
+      case 'daily': {
+        const result = economy.daily(message.author.id);
+        if (!result.success) return message.reply(`⏰ ${result.message}`);
+        const embed = new (require('discord.js').EmbedBuilder)()
+          .setColor(0xFFD700)
+          .setTitle('🪙 Daily Torch Coins Claimed!')
+          .setDescription(`**+${result.amount}** Torch Coins\n(Base: ${result.base} + Streak Bonus: ${result.streakBonus})`)
+          .addFields(
+            { name: 'Streak', value: `🔥 ${result.streak} days`, inline: true },
+            { name: 'Balance', value: `🪙 ${result.balance.toLocaleString()}`, inline: true },
+          );
+        return message.reply({ embeds: [embed] });
+      }
+
+      case 'gamble': {
+        const amt = parseInt(args[0]);
+        if (!amt || amt <= 0) return message.reply('Usage: `!gamble <amount>` — Flip a coin, double or nothing.');
+        const result = economy.gamble(message.author.id, amt);
+        if (!result.success) return message.reply(result.message);
+        // Check achievements after gamble
+        const newAch = achievements.check(message.author.id);
+        let reply = result.won
+          ? `🎰 **YOU WIN!** +🪙 ${result.amount}\nBalance: 🪙 ${result.balance.toLocaleString()}`
+          : `🎰 **YOU LOSE.** -🪙 ${result.amount}\nBalance: 🪙 ${result.balance.toLocaleString()}`;
+        if (newAch.length > 0) reply += `\n\n🏆 **ACHIEVEMENT UNLOCKED:** ${newAch.map(a => a.name).join(', ')}`;
+        return message.reply(reply);
+      }
+
+      case 'dungeon': {
+        const wager = parseInt(args[0]);
+        if (!wager || wager <= 0) return message.reply('Usage: `!dungeon <wager>` — Risk coins in a roguelike dungeon run.');
+        const result = economy.dungeon(message.author.id, wager);
+        if (!result.success) return message.reply(result.message);
+        const newAch = achievements.check(message.author.id);
+        const embed = new (require('discord.js').EmbedBuilder)()
+          .setColor(result.survived ? 0x00FF41 : 0xFF3333)
+          .setTitle(`⚔️ Dungeon: ${result.room}`)
+          .setDescription(result.flavor)
+          .addFields(
+            result.survived
+              ? { name: '✅ SURVIVED', value: `Wager: 🪙 ${result.wager} × ${result.multi} = **+🪙 ${result.reward}**\nBalance: 🪙 ${result.balance.toLocaleString()}` }
+              : { name: '💀 DEFEATED', value: `Lost: 🪙 ${result.wager}\nBalance: 🪙 ${result.balance.toLocaleString()}` }
+          );
+        if (newAch.length > 0) embed.addFields({ name: '🏆 ACHIEVEMENT UNLOCKED', value: newAch.map(a => a.name).join(', ') });
+        return message.reply({ embeds: [embed] });
+      }
+
+      case 'give':
+      case 'pay': {
+        const target = message.mentions.users.first();
+        const amt = parseInt(args[1]) || parseInt(args[0]);
+        if (!target || !amt) return message.reply('Usage: `!give @user <amount>`');
+        if (target.id === message.author.id) return message.reply('You can\'t give coins to yourself. Nice try.');
+        if (target.bot) return message.reply('Bots don\'t need coins. They\'re already rich in purpose.');
+        const result = economy.give(message.author.id, target.id, amt);
+        if (!result.success) return message.reply(result.message);
+        const u = economy.getUser(message.author.id);
+        if (!u.totalGiven) u.totalGiven = 0;
+        u.totalGiven += amt;
+        return message.reply(`🪙 Sent **${amt}** Torch Coins to ${target.displayName || target.username}!\nYour balance: 🪙 ${result.fromBalance.toLocaleString()}`);
+      }
+
+      case 'leaderboard':
+      case 'lb':
+      case 'top':
+        return message.reply({ embeds: [economy.leaderboardEmbed(message.guild)] });
+
+      // ── ACHIEVEMENT COMMANDS ──
+      case 'achievements':
+      case 'ach': {
+        const target = message.mentions.users.first() || message.author;
+        return message.reply({ embeds: [achievements.profileEmbed(target.id, target.displayName || target.username)] });
+      }
+
+      // ── GAME NIGHT COMMANDS ──
+      case 'gamenight':
+      case 'gn': {
+        const sub = args[0]?.toLowerCase();
+        if (!sub || sub === 'menu') {
+          // Interactive menu panel
+          return message.reply({
+            embeds: [gameNightUI.mainMenuEmbed()],
+            components: gameNightUI.mainMenuComponents(),
+          });
+        }
+        if (sub === 'list') {
+          const upcoming = gameNight.listUpcoming();
+          if (upcoming.length === 0) return message.reply('No game nights scheduled. Use `!gn <game> [time]` to create one!');
+          const embeds = upcoming.slice(0, 3).map(e => gameNight.eventEmbed(e, message.guild));
+          const components = upcoming.slice(0, 3).flatMap(e => gameNightUI.eventComponents(e));
+          return message.reply({ embeds, components });
+        }
+        if (sub === 'cancel') {
+          const id = args[1]?.toUpperCase();
+          if (!id) return message.reply('Usage: `!gn cancel <ID>`');
+          const result = gameNight.cancel(id, message.author.id);
+          return message.reply(result.success ? `✅ Game night ${id} cancelled.` : result.message);
+        }
+        if (sub === 'time') {
+          const id = args[1]?.toUpperCase();
+          const timeStr = args.slice(2).join(' ');
+          if (!id || !timeStr) return message.reply('Usage: `!gn time <ID> <time>` — e.g. `!gn time GN-001 friday 8pm`');
+          const result = gameNight.setTime(id, message.author.id, timeStr);
+          if (!result.success) return message.reply(result.message);
+          return message.reply(`⏰ Game night **${id}** scheduled for **${result.formattedTime}**`);
+        }
+        if (sub === 'lock') {
+          const id = args[1]?.toUpperCase();
+          if (!id) return message.reply('Usage: `!gn lock <ID>` — Lock in the most voted game.');
+          const result = gameNight.lockVote(id, message.author.id);
+          if (!result.success) return message.reply(result.message);
+          return message.reply(`🔒 Vote locked! **${result.winner}** wins! ${result.counts.map((c, i) => `${gameNight.data.upcoming.find(e => e.id === id)?.options?.[i]?.name || i}: ${c}`).join(', ')}`);
+        }
+        if (sub === 'vote') {
+          // !gn vote "Rust | CS2 | Helldivers 2" friday 8pm
+          const fullVoteArgs = args.slice(1).join(' ');
+          const quoteMatch = fullVoteArgs.match(/"([^"]+)"\s*(.*)/);
+          if (!quoteMatch) return message.reply('Usage: `!gn vote "game1 | game2 | game3" [time]`\nExample: `!gn vote "Rust | CS2 | Helldivers 2" friday 8pm`');
+          const gameNames = quoteMatch[1].split('|').map(g => g.trim()).filter(g => g);
+          if (gameNames.length < 2) return message.reply('Need at least 2 games to vote on.');
+          if (gameNames.length > 6) return message.reply('Max 6 options.');
+          const voteTimeStr = quoteMatch[2]?.trim() || null;
+          const event = gameNight.createVote(gameNames, message.author.id, voteTimeStr);
+          if (event.error) return message.reply(event.message);
+          return message.reply({ embeds: [gameNight.eventEmbed(event, message.guild)] });
+        }
+        if (sub === 'when' || sub === 'schedule' || sub === 'poll') {
+          // !gn when "Rust" fri-sun 8pm-11pm
+          const fullWhenArgs = args.slice(1).join(' ');
+          const whenMatch = fullWhenArgs.match(/"([^"]+)"\s+(\S+)\s+(\S+)/);
+          if (!whenMatch) return message.reply([
+            'Usage: `!gn when "game" <days> <time-range>`',
+            'Examples:',
+            '`!gn when "Rust" fri-sun 8pm-11pm`',
+            '`!gn when "CS2" fri,sat 7pm-10pm`',
+            '`!gn when "Helldivers 2" thursday-saturday 8pm-12am`',
+          ].join('\n'));
+          const event = gameNight.createSchedulePoll(whenMatch[1], message.author.id, whenMatch[2], whenMatch[3]);
+          if (event.error) return message.reply(event.message);
+          return message.reply({ embeds: [gameNight.eventEmbed(event, message.guild)] });
+        }
+        // Create a single-game night: !gn <game> [time]
+        const fullArgs = args.join(' ');
+        const { gameName, timeStr } = splitGameAndTime(fullArgs);
+        if (!gameName) return message.reply('Usage: `!gn <game> [time]` — e.g. `!gn Rust friday 8pm`');
+        const event = gameNight.create(gameName, message.author.id, timeStr);
+        if (event.error) return message.reply(event.message);
+        return message.reply({ embeds: [gameNight.eventEmbed(event, message.guild)] });
+      }
+
+      case 'vote': {
+        // !vote GN-001 2
+        const id = args[0]?.toUpperCase();
+        const optIdx = parseInt(args[1]);
+        if (!id || !optIdx) return message.reply('Usage: `!vote <event-ID> <option#>` — e.g. `!vote GN-005 2`');
+        const result = gameNight.vote(id, optIdx, message.author.id);
+        if (!result.success) return message.reply(result.message);
+        return message.reply({ content: `🗳️ Voted for **${result.voted}**!`, embeds: [gameNight.eventEmbed(result.event, message.guild)] });
+      }
+
+      case 'when': {
+        // !when GN-001 1 3 5 7 (multi-select time slots)
+        const id = args[0]?.toUpperCase();
+        const slotIndices = args.slice(1).map(Number).filter(n => !isNaN(n) && n > 0);
+        if (!id || slotIndices.length === 0) return message.reply('Usage: `!when <event-ID> <slot#> [slot#] [slot#]...`\nPick ALL times that work: `!when GN-005 1 3 5 7`');
+        const result = gameNight.scheduleVote(id, slotIndices, message.author.id);
+        if (!result.success) return message.reply(result.message);
+        return message.reply({ content: `📅 Marked available: **${result.slotNames}**`, embeds: [gameNight.eventEmbed(result.event, message.guild)] });
+      }
+
+      case 'signup':
+      case 'join_gn': {
+        const id = args[0]?.toUpperCase();
+        if (!id) return message.reply('Usage: `!signup <game-night-ID>`');
+        const result = gameNight.signup(id, message.author.id);
+        if (!result.success) return message.reply(result.message);
+        return message.reply(`✅ You're signed up for **${result.event.game}**! (${result.event.signups.length} players)`);
+      }
+
+      case 'leavegn': {
+        const id = args[0]?.toUpperCase();
+        if (!id) return message.reply('Usage: `!leavegn <game-night-ID>`');
+        const result = gameNight.leave(id, message.author.id);
+        return message.reply(result.success ? `👋 Left game night ${id}.` : result.message);
+      }
+
+      case 'games':
+        return message.reply({ embeds: [gameNight.gamesEmbed()] });
+
+      // ── DUEL COMMANDS ──
+      case 'duel': {
+        const target = message.mentions.users.first();
+        const amt = parseInt(args.find(a => /^\d+$/.test(a)));
+        if (!target || !amt) return message.reply('Usage: `!duel @user <amount>` — Challenge someone to a 1v1 coin duel.');
+        if (target.bot) return message.reply('Bots are above mortal duels.');
+        const result = duels.challenge(message.author.id, target.id, amt, message.channel.id);
+        if (!result.success) return message.reply(result.message);
+        return message.reply(`⚔️ **DUEL CHALLENGE!** ${message.author} challenges ${target} for 🪙 **${amt.toLocaleString()}** Torch Coins!\n\n${target}, type \`!accept\` to fight or \`!decline\` to flee. (60s to respond)`);
+      }
+
+      case 'accept': {
+        const result = duels.accept(message.author.id);
+        if (!result.success) return message.reply(result.message);
+        return message.reply({ embeds: [duels.resultEmbed(result, message.guild)] });
+      }
+
+      case 'decline': {
+        const result = duels.decline(message.author.id);
+        if (!result.success) return message.reply(result.message);
+        const challenger = message.guild.members.cache.get(result.challengerId);
+        return message.reply(`${message.author.displayName || message.author.username} declined the duel. **${challenger?.displayName || 'The challenger'}** sheathes their weapon. *Cowardice or wisdom? The Architect notes both.*`);
+      }
+
+      // ── PREDICTION MARKET COMMANDS ──
+      case 'predict': {
+        // !predict "Will NVDA hit 200 this week?" Yes | No | Maybe
+        const fullText = args.join(' ');
+        const qMatch = fullText.match(/"([^"]+)"\s+(.+)/);
+        if (!qMatch) return message.reply('Usage: `!predict "Your question here" option1 | option2 | option3`');
+        const question = qMatch[1];
+        const options = qMatch[2].split('|').map(o => o.trim()).filter(o => o);
+        const result = predictions.create(question, options, message.author.id);
+        if (!result.success) return message.reply(result.message);
+        return message.reply({ embeds: [predictions.marketEmbed(result.market, message.guild)] });
+      }
+
+      case 'bet': {
+        // !bet P-001 2 500
+        const marketId = args[0]?.toUpperCase();
+        const optionIdx = parseInt(args[1]);
+        const betAmt = parseInt(args[2]);
+        if (!marketId || !optionIdx || !betAmt) return message.reply('Usage: `!bet <market-ID> <option#> <amount>`');
+        const result = predictions.bet(marketId, optionIdx, message.author.id, betAmt);
+        if (!result.success) return message.reply(result.message);
+        return message.reply(`🔮 Bet placed! **🪙 ${result.betAmount.toLocaleString()}** on "${result.optionName}" (${result.odds}x odds)\nTotal pool: 🪙 ${result.totalPool.toLocaleString()}`);
+      }
+
+      case 'markets': {
+        const active = predictions.listActive();
+        if (active.length === 0) return message.reply('No active prediction markets. Create one with `!predict "question" option1 | option2`');
+        const embeds = active.slice(0, 3).map(m => predictions.marketEmbed(m, message.guild));
+        return message.reply({ embeds });
+      }
+
+      case 'resolve': {
+        // !resolve P-001 2
+        const marketId = args[0]?.toUpperCase();
+        const winOption = parseInt(args[1]);
+        if (!marketId || !winOption) return message.reply('Usage: `!resolve <market-ID> <winning-option#>` (creator only)');
+        const result = predictions.resolve(marketId, winOption, message.author.id);
+        if (!result.success) return message.reply(result.message);
+        return message.reply({ embeds: [predictions.payoutEmbed(result, message.guild)] });
+      }
+
+      // ── STARBOARD & VOICE COMMANDS ──
+      case 'stars': {
+        return message.reply({ embeds: [starboard.leaderboardEmbed(message.guild)] });
+      }
+
+      case 'voicestats':
+      case 'vs': {
+        const target = message.mentions.users.first() || message.author;
+        const stats = voiceRewards.getStats(target.id);
+        const hours = Math.floor(stats.totalMinutes / 60);
+        const mins = stats.totalMinutes % 60;
+        return message.reply(
+          `**🎙️ Voice Stats for ${target.displayName || target.username}:**\n\n` +
+          `Total time: **${hours}h ${mins}m**\n` +
+          `Today earned: 🪙 **${stats.todayEarned.toLocaleString()}** / ${stats.dailyCap.toLocaleString()} cap\n` +
+          `Rate: 🪙 ${stats.coinsPerMin}/min (need 2+ people, no deafen)`
+        );
+      }
+
+      case 'help':
+        return message.reply(
+          "**🔥 Pass The Torch — Commands**\n\n" +
+          "**💰 Economy**\n" +
+          "`!balance` — Torch Coin wallet\n" +
+          "`!daily` — Claim daily coins (streak bonus!)\n" +
+          "`!gamble <amt>` — Double or nothing\n" +
+          "`!dungeon <wager>` — Roguelike dungeon run\n" +
+          "`!give @user <amt>` — Send coins\n" +
+          "`!leaderboard` — Top holders\n\n" +
+          "**⚔️ Duels & Predictions**\n" +
+          "`!duel @user <amt>` — 1v1 coin wager\n" +
+          "`!accept` / `!decline` — Respond to a duel\n" +
+          "`!predict \"question\" opt1 | opt2` — Create prediction\n" +
+          "`!bet <ID> <opt#> <amt>` — Bet on a prediction\n" +
+          "`!markets` — View active predictions\n" +
+          "`!resolve <ID> <opt#>` — Resolve (creator)\n\n" +
+          "**🎮 Game Night**\n" +
+          "`!gn <game> [time]` — Host (`!gn Rust friday 8pm`)\n" +
+          "`!gn vote \"g1 | g2 | g3\" [time]` — Game vote\n" +
+          "`!vote <ID> <#>` — Vote on a game\n" +
+          "`!gn when \"game\" fri-sun 8pm-11pm` — Schedule poll\n" +
+          "`!when <ID> 1 3 5 7` — Vote times that work\n" +
+          "`!gn lock <ID>` — Lock in winner (host)\n" +
+          "`!gn list` / `!gn time` / `!signup` / `!games`\n\n" +
+          "**🏆 Stats**\n" +
+          "`!achievements` — Your achievements\n" +
+          "`!voicestats` — Voice time & earnings\n" +
+          "`!stars` — Hall of Fame leaderboard\n\n" +
+          "**⚖️ Jenkins**\n" +
+          "`!codex` / `!trinity` / `!judge <game>`\n" +
+          "`!sin <desc>` / `!sins` / `!rank` / `!session`\n" +
+          "`!join` / `!leave` / `!say <text>` — Voice\n\n" +
+          "⭐ React with ⭐ (3+) to immortalize messages in #hall-of-fame\n" +
+          "🎙️ Earn 🪙 15/min in voice (2+ people, not deafened)\n\n" +
+          "*@mention Jenkins to chat with the Architect.*"
         );
 
       default:
         break;
+    }
+  }
+
+  // --- Passive Torch Coin earning from chat ---
+  if (message.guild && !message.author.bot) {
+    economy.onMessage(message.author.id);
+    // Check achievements periodically (every 10 messages)
+    const user = economy.getUser(message.author.id);
+    if (user.messagesCount % 10 === 0) {
+      const newAch = achievements.check(message.author.id);
+      for (const ach of newAch) {
+        try {
+          message.channel.send({ embeds: [achievements.unlockEmbed(ach, message.author.displayName || message.author.username)] });
+        } catch (e) {}
+      }
     }
   }
 
@@ -487,6 +1201,15 @@ client.on(Events.MessageCreate, async (message) => {
       const topSin = sins[0]; // Most severe sin
       if (sinDetector.shouldCallOut(topSin, message.author.id)) {
         sinDetector.recordSin(message.author.id, message.author.displayName || message.author.username, topSin);
+
+        // Mood: sin detected
+        mood.onSinDetected(topSin.type);
+
+        // SFX: play sin sound in voice
+        if (soundEffects && voiceManager?.isConnected(message.guild.id)) {
+          const sfxKey = `sin_${topSin.type}`;
+          if (SOUND_TRIGGERS[sfxKey]) soundEffects.play(sfxKey, voiceManager, message.guild.id);
+        }
 
         // Alter Ego system: rivals get personality-fractured callouts
         const isRival = sinDetector.rivalIds.has(message.author.id);
@@ -577,7 +1300,7 @@ client.on(Events.MessageCreate, async (message) => {
         );
         return message.reply(response).catch(() => {});
       } catch (err) {
-        console.error('[MSG] Jenkins name-invoke error:', err.message);
+        log.error({ err }, 'Jenkins name-invoke error');
       }
     }
   }
@@ -614,7 +1337,7 @@ client.on(Events.MessageCreate, async (message) => {
       : '';
     return message.reply(prefix + response).catch(() => {});
     } catch (err) {
-      console.error('[MSG] Reply error:', err.message);
+      log.error({ err }, 'Reply error');
       message.reply('The Architect\'s mind wanders. Speak again, Brother.').catch(() => {});
     }
   }
@@ -622,11 +1345,35 @@ client.on(Events.MessageCreate, async (message) => {
 
 // --- Error handling ---
 client.on('error', (err) => {
-  console.error('Discord client error:', err);
+  log.error({ err }, 'Discord client error');
 });
 
 process.on('unhandledRejection', (err) => {
-  console.error('Unhandled rejection:', err);
+  log.error({ err }, 'Unhandled rejection');
+});
+
+// --- Interaction Handler (buttons, menus, modals) ---
+client.on(Events.InteractionCreate, async (interaction) => {
+  try {
+    if (interaction.isButton() || interaction.isStringSelectMenu()) {
+      const handled = await gameNightUI.handleInteraction(interaction, GAME_LIBRARY);
+      if (handled) return;
+    }
+
+    if (interaction.isModalSubmit()) {
+      const handled = await gameNightUI.handleModalSubmit(interaction);
+      if (handled) return;
+    }
+  } catch (e) {
+    log.error({ err: e }, 'Interaction error');
+    try {
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({ content: 'Something went wrong.', ephemeral: true });
+      } else {
+        await interaction.reply({ content: 'Something went wrong.', ephemeral: true });
+      }
+    } catch {}
+  }
 });
 
 // --- Reaction Roles ---
@@ -643,6 +1390,12 @@ const REACTION_ROLE_MAP = {
 
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
   if (user.bot) return;
+  if (reaction.partial) await reaction.fetch().catch(() => {});
+  if (reaction.message.partial) await reaction.message.fetch().catch(() => {});
+
+  // Starboard: check for star reactions on any message
+  starboard.handleReaction(reaction, user).catch(e => log.error({ err: e }, 'Starboard reaction error'));
+
   if (reaction.message.id !== REACTION_ROLE_MESSAGE) return;
   if (reaction.partial) await reaction.fetch();
 
@@ -652,9 +1405,9 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
   try {
     const member = await reaction.message.guild.members.fetch(user.id);
     await member.roles.add(roleId);
-    console.log(`[Reaction Role] +${reaction.emoji.name} → ${user.username}`);
+    log.info({ emoji: reaction.emoji.name, username: user.username }, 'Reaction role added');
   } catch (e) {
-    console.error('[Reaction Role] Add failed:', e.message);
+    log.error({ err: e }, 'Reaction role add failed');
   }
 });
 
@@ -669,9 +1422,9 @@ client.on(Events.MessageReactionRemove, async (reaction, user) => {
   try {
     const member = await reaction.message.guild.members.fetch(user.id);
     await member.roles.remove(roleId);
-    console.log(`[Reaction Role] -${reaction.emoji.name} → ${user.username}`);
+    log.info({ emoji: reaction.emoji.name, username: user.username }, 'Reaction role removed');
   } catch (e) {
-    console.error('[Reaction Role] Remove failed:', e.message);
+    log.error({ err: e }, 'Reaction role remove failed');
   }
 });
 

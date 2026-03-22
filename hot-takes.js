@@ -3,6 +3,7 @@
 // Political commentary gets immediately undercut with Stavros-style absurdity.
 
 const { chat } = require('./deepseek');
+const log = require('./logger').child('HotTakes');
 
 // ═══════════════════════════════════════════════════════════════
 // Activity Tracker — monitors chat flow to detect "the vibes are up"
@@ -87,7 +88,7 @@ async function generateHotTake(deepseekClient, systemPrompt) {
   try {
     return await chat(deepseekClient, systemPrompt, prompt);
   } catch (e) {
-    console.error('[HotTakes] Generation error:', e.message);
+    log.error({ err: e }, 'Hot take generation error');
     return null;
   }
 }
@@ -97,7 +98,7 @@ async function generateStavrosBreak(deepseekClient, systemPrompt) {
   try {
     return await chat(deepseekClient, systemPrompt, prompt);
   } catch (e) {
-    console.error('[Stavros] Generation error:', e.message);
+    log.error({ err: e }, 'Stavros break generation error');
     return null;
   }
 }

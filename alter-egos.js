@@ -69,6 +69,8 @@ const ALTER_EGOS = {
   },
 };
 
+const log = require('./logger').child('AlterEgo');
+
 // Weighted random selection
 function pickAlterEgo(isRival = false) {
   // Non-rivals: 25% chance to get an alter ego, otherwise Jenkins Prime
@@ -105,7 +107,7 @@ function pickAlterEgoForUser(userId, isRival = false, messageContent = '') {
           if (pattern.test(messageContent)) {
             // 60% chance to use the triggered ego
             if (Math.random() < 0.6) {
-              console.log(`[AlterEgo] ${ego.name} TRIGGERED by content match for user ${userId}`);
+              log.info({ ego: ego.name, userId }, 'Alter ego triggered by content');
               lastAlterPerUser.set(userId, ego.name);
               return ego;
             }
@@ -127,7 +129,7 @@ function pickAlterEgoForUser(userId, isRival = false, messageContent = '') {
   lastAlterPerUser.set(userId, picked.name);
 
   if (picked.name !== 'Jenkins Prime') {
-    console.log(`[AlterEgo] ${picked.name} has emerged for user ${userId}`);
+    log.info({ ego: picked.name, userId }, 'Alter ego emerged');
   }
 
   return picked;

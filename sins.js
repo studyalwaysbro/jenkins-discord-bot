@@ -5,6 +5,7 @@ const path = require('path');
 const { chat } = require('./deepseek');
 
 const LEDGER_PATH = path.join(__dirname, 'sin-ledger.json');
+const log = require('./logger').child('Sins');
 
 // ═══════════════════════════════════════════════════════════════
 // Sin Patterns — What the Architect watches for
@@ -222,7 +223,7 @@ class SinDetector {
     if (bestUserId && bestUserId !== this.autoVipId) {
       this.autoVipId = bestUserId;
       const name = this.ledger[bestUserId]?.username || 'Unknown';
-      console.log(`[Sins] AUTO-VIP DETECTED: ${name} (${bestUserId}) — the most faithful Brother`);
+      log.info({ userId: bestUserId, username: name }, 'Auto-VIP detected');
     }
   }
 
@@ -280,7 +281,7 @@ class SinDetector {
         this.autoRivalId = worstUserId;
         this.rivalIds.add(worstUserId);
         const name = this.ledger[worstUserId]?.username || 'Unknown';
-        console.log(`[Sins] AUTO-RIVAL DETECTED: ${name} (${worstUserId}) with ${worstCount} dismissal sins`);
+        log.info({ userId: worstUserId, username: name, dismissalSins: worstCount }, 'Auto-rival detected');
       }
     }
   }
@@ -294,7 +295,7 @@ class SinDetector {
         return JSON.parse(data);
       }
     } catch (e) {
-      console.error('[Sins] Failed to load sin ledger:', e.message);
+      log.error({ err: e }, 'Failed to load sin ledger');
     }
     return {};
   }
@@ -303,7 +304,7 @@ class SinDetector {
     try {
       fs.writeFileSync(LEDGER_PATH, JSON.stringify(this.ledger, null, 2));
     } catch (e) {
-      console.error('[Sins] Failed to save sin ledger:', e.message);
+      log.error({ err: e }, 'Failed to save sin ledger');
     }
   }
 
@@ -376,7 +377,7 @@ class SinDetector {
     entry.lastSin = Date.now();
     this.saveLedger();
 
-    console.log(`[Sins] Recorded ${sinResult.type} sin "${sinResult.name}" for ${username} (${userId}). Total: V=${entry.totalVenial} M=${entry.totalMortal} U=${entry.totalUnforgivable}`);
+    log.info({ severity: sinResult.type, sin: sinResult.name, userId, username, totals: { venial: entry.totalVenial, mortal: entry.totalMortal, unforgivable: entry.totalUnforgivable } }, 'Sin recorded');
 
     // Recalculate auto-rival when dismissal sins are recorded
     if (sinResult.name === 'dismissing_jenkins' || sinResult.name === 'disinterest_in_jenkins' || sinResult.name === 'passive_dismissal') {
@@ -516,7 +517,7 @@ Call them out IN CHARACTER as Jenkins. ${lengthNote} Be dramatic and funny, not 
       const response = await chat(this.deepseek, activePrompt, prompt);
       return response;
     } catch (e) {
-      console.error('[Sins] Callout generation error:', e.message);
+      log.error({ err: e }, 'Callout generation error');
       return null;
     }
   }

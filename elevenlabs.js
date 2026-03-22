@@ -1,6 +1,7 @@
 // elevenlabs.js — The Voice of the Architect, channeled through ElevenLabs + Edge TTS Fallback
 
 const https = require('https');
+const log = require('./logger').child('ElevenLabs');
 
 const ELEVENLABS_BASE = 'https://api.elevenlabs.io/v1';
 
@@ -26,7 +27,7 @@ function resetQuota() {
   quotaExhausted = false;
   ttsFallbackActive = false;
   lastQuotaError = null;
-  console.log('[ElevenLabs] Quota reset — trying ElevenLabs again');
+  log.info('Quota reset — trying ElevenLabs again');
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -51,7 +52,7 @@ async function textToSpeech(apiKey, text, voiceId) {
   } catch (err) {
     // Check if this is a quota error
     if (err.message.includes('quota_exceeded') || err.message.includes('401')) {
-      console.error('[ElevenLabs] QUOTA EXHAUSTED — switching to Edge TTS fallback');
+      log.warn('Quota exhausted — switching to Edge TTS fallback');
       quotaExhausted = true;
       ttsFallbackActive = true;
       lastQuotaError = Date.now();
@@ -96,7 +97,7 @@ async function textToSpeechWithVoice(apiKey, text, voiceConfig) {
     return { buffer, usedFallback: false };
   } catch (err) {
     if (err.message.includes('quota_exceeded') || err.message.includes('401')) {
-      console.error('[ElevenLabs] QUOTA EXHAUSTED — switching to Edge TTS fallback');
+      log.warn('Quota exhausted — switching to Edge TTS fallback');
       quotaExhausted = true;
       ttsFallbackActive = true;
       lastQuotaError = Date.now();
@@ -183,8 +184,124 @@ async function edgeTTS(text, voice, rate, pitch) {
     }
     return result;
   } catch (err) {
-    console.error('[EdgeTTS] Error:', err.message);
+    log.error({ err }, 'Edge TTS error');
     throw new Error(`Edge TTS failed: ${err.message}`);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Streaming TTS — sentence-by-sentence for pipeline overlap
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Streaming ElevenLabs TTS — uses the /stream endpoint for chunked audio.
+ * Returns a readable stream of audio chunks instead of a full buffer.
+ */
+function elevenLabsTTSStream(apiKey, text, voiceId, settings) {
+  voiceId = voiceId || DEFAULT_VOICE_ID;
+  const { PassThrough } = require('stream');
+  const output = new PassThrough();
+
+  const voiceSettings = settings || {
+    stability: 0.4,
+    similarity_boost: 0.8,
+    style: 0.6,
+    use_speaker_boost: true,
+  };
+
+  const url = `${ELEVENLABS_BASE}/text-to-speech/${voiceId}/stream`;
+  const body = JSON.stringify({
+    text,
+    model_id: 'eleven_multilingual_v2',
+    voice_settings: voiceSettings,
+    optimize_streaming_latency: 3,
+  });
+
+  const urlObj = new URL(url);
+  const req = https.request(
+    {
+      hostname: urlObj.hostname,
+      path: urlObj.pathname,
+      method: 'POST',
+      timeout: 15000,
+      headers: {
+        'xi-api-key': apiKey,
+        'Content-Type': 'application/json',
+        Accept: 'audio/mpeg',
+      },
+    },
+    (res) => {
+      if (res.statusCode !== 200) {
+        let errData = '';
+        res.on('data', (chunk) => (errData += chunk));
+        res.on('end', () => output.destroy(new Error(`ElevenLabs stream error ${res.statusCode}: ${errData}`)));
+        return;
+      }
+      res.pipe(output);
+    }
+  );
+  req.on('timeout', () => { req.destroy(new Error('ElevenLabs stream timed out')); });
+  req.on('error', (err) => output.destroy(err));
+  req.write(body);
+  req.end();
+
+  return output;
+}
+
+/**
+ * Streaming Edge TTS — returns a PassThrough stream of audio chunks.
+ */
+async function edgeTTSStream(text, voice, rate, pitch) {
+  const { PassThrough } = require('stream');
+  const output = new PassThrough();
+
+  voice = voice || 'en-US-GuyNeural';
+  rate = rate || '-5%';
+  pitch = pitch || '-15Hz';
+
+  (async () => {
+    try {
+      const { Communicate } = await import('edge-tts-universal');
+      const comm = new Communicate(text, voice, rate, pitch, '+0%');
+      for await (const chunk of comm.stream()) {
+        if (chunk.type === 'audio' && chunk.data) {
+          output.write(chunk.data);
+        }
+      }
+      output.end();
+    } catch (err) {
+      output.destroy(new Error(`Edge TTS stream failed: ${err.message}`));
+    }
+  })();
+
+  return output;
+}
+
+/**
+ * Streaming TTS dispatcher — routes to ElevenLabs stream or Edge TTS stream.
+ * Returns a PassThrough stream. Use voiceConfig to select voice type.
+ */
+async function textToSpeechStream(apiKey, text, voiceConfig) {
+  // Edge TTS voices (alter egos) or fallback
+  if (voiceConfig?.type === 'edge' || quotaExhausted) {
+    const voice = voiceConfig?.msVoice || 'en-US-GuyNeural';
+    const rate = voiceConfig?.rate || '-5%';
+    const pitch = voiceConfig?.pitch || '-15Hz';
+    return edgeTTSStream(text, voice, rate, pitch);
+  }
+
+  // ElevenLabs streaming
+  try {
+    ttsCallCount++;
+    return elevenLabsTTSStream(apiKey, text, voiceConfig?.voiceId, voiceConfig?.settings);
+  } catch (err) {
+    if (err.message.includes('quota_exceeded') || err.message.includes('401')) {
+      quotaExhausted = true;
+      ttsFallbackActive = true;
+      lastQuotaError = Date.now();
+      return edgeTTSStream(text);
+    }
+    throw err;
   }
 }
 
@@ -256,6 +373,7 @@ async function speechToText(apiKey, audioBuffer) {
 module.exports = {
   textToSpeech,
   textToSpeechWithVoice,
+  textToSpeechStream,
   speechToText,
   edgeTTS,
   DEFAULT_VOICE_ID,

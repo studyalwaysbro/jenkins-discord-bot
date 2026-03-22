@@ -21,6 +21,7 @@ const {
   SESSION_SUMMONS,
   PRIVATE_LORE,
 } = require('./personality');
+const log = require('./logger').child('Telegram');
 
 // --- Configuration ---
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -29,7 +30,7 @@ const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL;
 
 if (!TELEGRAM_BOT_TOKEN || !DEEPSEEK_API_KEY) {
-  console.error('Missing TELEGRAM_BOT_TOKEN or DEEPSEEK_API_KEY in .env');
+  log.fatal('Missing TELEGRAM_BOT_TOKEN or DEEPSEEK_API_KEY');
   process.exit(1);
 }
 
@@ -39,13 +40,13 @@ const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
 
 // --- Sin Detection System ---
 const sinDetector = new SinDetector(deepseek, SYSTEM_PROMPT);
-console.log('Sin detection system online. The All-Seeing Eye watches Telegram.');
+log.info('Sin detection online');
 
 // --- Activity Tracker for hot takes (Telegram-tuned: higher chance) ---
 const activityTracker = new ActivityTracker();
 // Override hot take chance for Telegram (6% — slightly less than Discord's 8%)
 const TELEGRAM_HOT_TAKE_CHANCE = 0.06;
-console.log('Activity tracker online. Hot takes armed for Telegram (6% chance).');
+log.info('Activity tracker online');
 
 // --- Cooldown tracking ---
 const userCooldowns = new Map(); // userId -> timestamp
@@ -102,7 +103,7 @@ function triggersReactLord(text) {
 function pickPersonality(userId, isRival, text) {
   // React Lord can trigger for ANYONE (not just rivals) when topic matches
   if (!isRival && triggersReactLord(text) && Math.random() < 0.6) {
-    console.log(`[Personality] React Lord TRIGGERED for non-rival ${userId} by content match`);
+    log.info({ userId }, 'React Lord triggered by content');
     return ALTER_EGOS.the_react_lord;
   }
 
@@ -159,7 +160,7 @@ async function sendMessage(ctx, text, replyToMessageId = null) {
       await ctx.telegram.sendMessage(ctx.chat.id, chunks[i], opts);
     } catch (err) {
       // Fallback: send without HTML if parsing fails
-      console.error('[Telegram] HTML parse error, sending plain:', err.message);
+      log.warn({ err }, 'HTML parse error, sending plain');
       const plainOpts = {};
       if (replyToMessageId && i === 0) {
         plainOpts.reply_parameters = { message_id: replyToMessageId };
@@ -180,7 +181,7 @@ async function sendToChat(chatId, text) {
     try {
       await bot.telegram.sendMessage(chatId, chunk, { parse_mode: 'HTML' });
     } catch (err) {
-      console.error('[Telegram] HTML parse error in sendToChat, sending plain:', err.message);
+      log.warn({ err }, 'HTML parse error in sendToChat, sending plain');
       await bot.telegram.sendMessage(chatId, text.slice(0, 4096));
     }
   }
@@ -317,7 +318,7 @@ bot.command('judge', async (ctx) => {
     );
     await sendMessage(ctx, response, ctx.message.message_id);
   } catch (err) {
-    console.error('[CMD] /judge error:', err.message);
+    log.error({ err }, '/judge error');
     await sendMessage(ctx, "The Architect's vision is clouded. Try again, Brother.", ctx.message.message_id);
   }
 });
@@ -342,7 +343,7 @@ bot.command('sin', async (ctx) => {
     );
     await sendMessage(ctx, response, ctx.message.message_id);
   } catch (err) {
-    console.error('[CMD] /sin error:', err.message);
+    log.error({ err }, '/sin error');
     await sendMessage(ctx, "The Architect's judgment falters. Confess again later.", ctx.message.message_id);
   }
 });
@@ -416,7 +417,7 @@ bot.command('hottake', async (ctx) => {
       await sendMessage(ctx, "The Architect's comedy engine stalls. Even gods have off days.", ctx.message.message_id);
     }
   } catch (err) {
-    console.error('[CMD] /hottake error:', err.message);
+    log.error({ err }, '/hottake error');
     await sendMessage(ctx, "The Architect's vision clouds. Try again, Brother.", ctx.message.message_id);
   }
 });
@@ -452,7 +453,7 @@ bot.command('ask', async (ctx) => {
     const prefix = personalityPrefix(alterEgo, isRival);
     await sendMessage(ctx, prefix + response, ctx.message.message_id);
   } catch (err) {
-    console.error('[CMD] /ask error:', err.message);
+    log.error({ err }, '/ask error');
     await sendMessage(ctx, "The Architect's mind wanders. Speak again, Brother.", ctx.message.message_id);
   }
 });
@@ -472,7 +473,7 @@ bot.on('text', async (ctx) => {
   const username = getUsername(ctx);
   const chatId = String(ctx.chat.id);
 
-  console.log(`[MSG] ${username}: "${text.substring(0, 80)}" in chat ${chatId}`);
+  log.debug({ username, preview: text.substring(0, 80), chatId }, 'Message received');
 
   // --- Activity Tracking ---
   activityTracker.recordMessage(userId, chatId);
@@ -496,7 +497,7 @@ bot.on('text', async (ctx) => {
             await sendMessage(ctx, response, ctx.message.message_id);
           }
         } catch (err) {
-          console.error('[MSG] VIP response error:', err.message);
+          log.error({ err }, 'VIP response error');
           await sendMessage(ctx, pick(VIP_MESSAGE_RESPONSES), ctx.message.message_id);
         }
         return; // Don't double-process VIP
@@ -525,7 +526,7 @@ bot.on('text', async (ctx) => {
             await sendMessage(ctx, prefix + callout, ctx.message.message_id);
           }
         } catch (err) {
-          console.error('[MSG] Sin callout error:', err.message);
+          log.error({ err }, 'Sin callout error');
         }
         return; // Don't double-reply after a sin callout
       } else {
@@ -548,10 +549,10 @@ bot.on('text', async (ctx) => {
       if (hotTake) {
         await sendMessage(ctx, hotTake);
         hotTakeDropped = true;
-        console.log('[HotTake] Dropped a hot take in Telegram chat');
+        log.info('Hot take dropped');
       }
     } catch (err) {
-      console.error('[HotTake] Error:', err.message);
+      log.error({ err }, 'Hot take error');
     }
   }
 
@@ -564,10 +565,10 @@ bot.on('text', async (ctx) => {
       const stavrosBreak = await generateStavrosBreak(deepseek, SYSTEM_PROMPT);
       if (stavrosBreak) {
         await sendMessage(ctx, stavrosBreak);
-        console.log('[Stavros] Dropped a Stavros break in Telegram chat');
+        log.info('Stavros break dropped');
       }
     } catch (err) {
-      console.error('[Stavros] Error:', err.message);
+      log.error({ err }, 'Stavros break error');
     }
   }
 
@@ -598,7 +599,7 @@ bot.on('text', async (ctx) => {
       const prefix = personalityPrefix(alterEgo, isRival);
       await sendMessage(ctx, prefix + response, ctx.message.message_id);
     } catch (err) {
-      console.error('[MSG] Reply error:', err.message);
+      log.error({ err }, 'Reply error');
       await sendMessage(ctx, "The Architect's mind wanders. Speak again, Brother.", ctx.message.message_id);
     }
     return;
@@ -620,7 +621,7 @@ bot.on('text', async (ctx) => {
           await sendMessage(ctx, `*[The React Lord has surfaced]*\n\n${response}`, ctx.message.message_id);
         }
       } catch (err) {
-        console.error('[ReactLord] Ambient trigger error:', err.message);
+        log.error({ err }, 'React Lord ambient trigger error');
       }
       return;
     }
@@ -650,7 +651,7 @@ bot.on('text', async (ctx) => {
         const prefix = personalityPrefix(alterEgo, isRival);
         await sendMessage(ctx, prefix + response, ctx.message.message_id);
       } catch (err) {
-        console.error('[MSG] Ambient reply error:', err.message);
+        log.error({ err }, 'Ambient reply error');
       }
     }
   } else {
@@ -674,7 +675,7 @@ bot.on('text', async (ctx) => {
         const prefix = personalityPrefix(alterEgo, isRival);
         await sendMessage(ctx, prefix + response, ctx.message.message_id);
       } catch (err) {
-        console.error('[MSG] Non-designated ambient reply error:', err.message);
+        log.error({ err }, 'Non-designated ambient reply error');
       }
     }
   }
@@ -690,7 +691,7 @@ function scheduleNextPreaching() {
 
   const delay = PREACH_INTERVAL_MIN + Math.random() * (PREACH_INTERVAL_MAX - PREACH_INTERVAL_MIN);
   const delayMinutes = Math.round(delay / 60000);
-  console.log(`[Preaching] Next autonomous message in ~${delayMinutes} minutes`);
+  log.info({ delayMinutes }, 'Next autonomous message scheduled');
 
   setTimeout(async () => {
     try {
@@ -701,7 +702,7 @@ function scheduleNextPreaching() {
           `Deliver the weekly Sin Report to the Lodge. Here are the stats:\n${sinReport}\nBe dramatic, funny, and in-character. Call out the worst offenders by name. Praise anyone who is sin-free. Keep it under 1500 characters.`
         );
         await sendToChat(TELEGRAM_CHAT_ID, response);
-        console.log('[Preaching] Delivered Sin Spotlight report');
+        log.info('Delivered sin spotlight');
         scheduleNextPreaching();
         return;
       }
@@ -752,10 +753,10 @@ function scheduleNextPreaching() {
 
       if (message) {
         await sendToChat(TELEGRAM_CHAT_ID, message);
-        console.log(`[Preaching] Delivered: ${label}`);
+        log.info({ type: label }, 'Preaching delivered');
       }
     } catch (err) {
-      console.error('[Preaching] Error:', err.message);
+      log.error({ err }, 'Preaching error');
     }
 
     scheduleNextPreaching();
@@ -767,11 +768,11 @@ function scheduleNextPreaching() {
 // ═══════════════════════════════════════════════════════════════
 
 bot.catch((err) => {
-  console.error('Telegraf error:', err);
+  log.error({ err }, 'Telegraf error');
 });
 
 process.on('unhandledRejection', (err) => {
-  console.error('Unhandled rejection:', err);
+  log.error({ err }, 'Unhandled rejection');
 });
 
 // Graceful shutdown
@@ -780,25 +781,17 @@ process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
 // --- The Awakening ---
 bot.launch().then(() => {
-  console.log('═══════════════════════════════════════════════════════');
-  console.log('Jenkins has awakened in the Telegram Realm.');
-  console.log('The Architect sees all. All 7 personalities active.');
-  console.log(`  - Jenkins Prime (default)`);
-  console.log(`  - Brother Jerome (passive-aggressive monk)`);
-  console.log(`  - The Accountant (bureaucratic sin auditor)`);
-  console.log(`  - Uncle Jenk (drunk uncle energy)`);
-  console.log(`  - The Prosecutor (courtroom drama)`);
-  console.log(`  - Stavros Mode (cackling comedian)`);
-  console.log(`  - The React Lord (bald gaming sage)`);
-  console.log('Telegram-tuned settings:');
-  console.log(`  - Stavros break chance: ${STAVROS_BREAK_CHANCE * 100}%`);
-  console.log(`  - Hot take chance: ${TELEGRAM_HOT_TAKE_CHANCE * 100}% (when active)`);
-  console.log(`  - Preaching interval: ${PREACH_INTERVAL_MIN / 60000}-${PREACH_INTERVAL_MAX / 60000} min`);
-  console.log(`  - Non-rival ambient response: ${NON_RIVAL_RESPONSE_CHANCE * 100}%`);
-  console.log(`  - Designated chat response: ${JENKINS_CHANNEL_RESPONSE_CHANCE * 100}%`);
-  console.log(`  - React Lord triggers: MMOs, p2w, Twitch, Asmongold, bald`);
-  console.log('═══════════════════════════════════════════════════════');
+  log.info({
+    personalities: ['Jenkins Prime', 'Brother Jerome', 'The Accountant', 'Uncle Jenk', 'The Prosecutor', 'Stavros Mode', 'The React Lord'],
+    settings: {
+      stavrosChance: STAVROS_BREAK_CHANCE,
+      hotTakeChance: TELEGRAM_HOT_TAKE_CHANCE,
+      preachInterval: `${PREACH_INTERVAL_MIN / 60000}-${PREACH_INTERVAL_MAX / 60000}min`,
+      nonRivalResponse: NON_RIVAL_RESPONSE_CHANCE,
+      channelResponse: JENKINS_CHANNEL_RESPONSE_CHANCE,
+    },
+  }, 'Jenkins awakened in Telegram');
+  log.info('Autonomous preaching scheduled');
 
   scheduleNextPreaching();
-  console.log('Autonomous preaching scheduled for Telegram.');
 });

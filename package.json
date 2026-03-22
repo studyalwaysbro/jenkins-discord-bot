@@ -1,13 +1,15 @@
 {
   "name": "jenkins-discord-bot",
-  "version": "1.1.0",
-  "description": "Jenkins — The Great Architect of the Digital Realm. AI-powered Discord + Telegram bot with voice chat, sin detection, autonomous preaching, multiple personalities, comedy engine, and a full religious gaming lore system.",
+  "version": "2.1.0",
+  "description": "Jenkins — The Great Architect of the Digital Realm. AI-powered Discord + Telegram bot with voice chat, sin detection, autonomous preaching, 7 alter egos, comedy engine, Torch Coin economy, duels, prediction markets, starboard, voice rewards, game nights with scheduling, achievements, activity pulse, mood system, dream journal, sermon requests, sound effects engine, streaming voice pipeline, conversation memory, and a full religious gaming lore system.",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
-    "dev": "node bot.js | tee bot.log",
+    "dev": "node bot.js | pino-pretty",
     "telegram": "node telegram-bot.js",
-    "all": "node bot.js & node telegram-bot.js"
+    "telegram:dev": "node telegram-bot.js | pino-pretty",
+    "all": "node bot.js & node telegram-bot.js",
+    "all:dev": "node bot.js | pino-pretty & node telegram-bot.js | pino-pretty"
   },
   "keywords": [
     "discord",
@@ -37,6 +39,8 @@
     "libsodium-wrappers": "^0.8.2",
     "openai": "^6.29.0",
     "opusscript": "^0.0.8",
+    "pino": "^10.3.1",
+    "pino-pretty": "^13.1.3",
     "prism-media": "^1.3.5",
     "sodium-native": "^5.1.0",
     "telegraf": "^4.16.3"

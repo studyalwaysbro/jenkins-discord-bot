@@ -1,5 +1,5 @@
 // voice.js — Jenkins enters the Tavern: Voice Channel Management
-// With advanced noise filtering, credit monitoring, alter ego voices, and auto-fallback
+// v3.0 — Streaming pipeline, conversation memory, wake/sleep, latency monitoring
 
 const {
   joinVoiceChannel,
@@ -11,11 +11,13 @@ const {
   entersState,
   StreamType,
 } = require('@discordjs/voice');
-const { Readable } = require('stream');
-const { textToSpeech, textToSpeechWithVoice, speechToText, isQuotaExhausted, isFallbackActive, getStats } = require('./elevenlabs');
-const { chat } = require('./deepseek');
+const { Readable, PassThrough } = require('stream');
+const { textToSpeech, textToSpeechWithVoice, textToSpeechStream, speechToText, isQuotaExhausted, isFallbackActive, getStats } = require('./elevenlabs');
+const { chat, chatStream } = require('./deepseek');
+const { PipelineTimer, SessionStats } = require('./latency-monitor');
 const prism = require('prism-media');
 const path = require('path');
+const log = require('./logger').child('Voice');
 
 // Point to the bundled ffmpeg binary
 const ffmpegPath = require('ffmpeg-static');
@@ -26,10 +28,6 @@ process.env.FFMPEG_PATH = ffmpegPath;
 // PCM format: 16-bit signed LE, mono, 48kHz
 // ═══════════════════════════════════════════════════════════════
 
-/**
- * Calculate RMS (Root Mean Square) energy of a PCM buffer.
- * Returns a value between 0 and 1 (normalized).
- */
 function calculateRMS(pcmBuffer) {
   if (pcmBuffer.length % 2 !== 0) pcmBuffer = pcmBuffer.subarray(0, pcmBuffer.length - 1);
   const samples = pcmBuffer.length / 2;
@@ -42,9 +40,6 @@ function calculateRMS(pcmBuffer) {
   return Math.sqrt(sumSquares / samples) / 32768;
 }
 
-/**
- * Calculate peak absolute sample value (normalized 0-1).
- */
 function calculatePeak(pcmBuffer) {
   if (pcmBuffer.length % 2 !== 0) pcmBuffer = pcmBuffer.subarray(0, pcmBuffer.length - 1);
   let maxAbs = 0;
@@ -55,12 +50,6 @@ function calculatePeak(pcmBuffer) {
   return maxAbs / 32768;
 }
 
-/**
- * Calculate Zero-Crossing Rate per chunk.
- * Speech: moderate ZCR (50-200 per 100ms at 48kHz)
- * Keyboard clicks: very high ZCR (>300)
- * Ambient hum: very low ZCR (<30)
- */
 function calculateZCR(pcmBuffer) {
   if (pcmBuffer.length % 2 !== 0) pcmBuffer = pcmBuffer.subarray(0, pcmBuffer.length - 1);
   let crossings = 0;
@@ -74,27 +63,17 @@ function calculateZCR(pcmBuffer) {
   return crossings;
 }
 
-/**
- * Simple band energy estimation using DFT on small windows.
- * Returns ratio of energy in speech band (300Hz-3000Hz) vs total energy.
- * Speech: >0.4 ratio. TV/music: <0.3. Clicks: <0.2 (broadband).
- */
 function calculateSpeechBandRatio(pcmBuffer) {
-  // Use a 512-sample window (~10.7ms at 48kHz) — enough for rough frequency estimation
   const WINDOW = 512;
   const SAMPLE_RATE = 48000;
-  const SPEECH_LOW = 300;  // Hz
-  const SPEECH_HIGH = 3000; // Hz
-
-  // Frequency bin boundaries
+  const SPEECH_LOW = 300;
+  const SPEECH_HIGH = 3000;
   const binLow = Math.floor(SPEECH_LOW * WINDOW / SAMPLE_RATE);
   const binHigh = Math.ceil(SPEECH_HIGH * WINDOW / SAMPLE_RATE);
 
   let totalBandEnergy = 0;
   let totalEnergy = 0;
   let windowCount = 0;
-
-  // Sample up to 10 windows evenly across the buffer
   const step = Math.max(WINDOW * 2, Math.floor(pcmBuffer.length / 2 / 10));
 
   for (let offset = 0; offset + WINDOW * 2 <= pcmBuffer.length; offset += step) {
@@ -102,8 +81,6 @@ function calculateSpeechBandRatio(pcmBuffer) {
     for (let i = 0; i < WINDOW; i++) {
       samples.push(pcmBuffer.readInt16LE(offset + i * 2) / 32768);
     }
-
-    // Compute magnitude of DFT bins (only up to Nyquist)
     for (let k = 0; k <= WINDOW / 2; k++) {
       let real = 0, imag = 0;
       for (let n = 0; n < WINDOW; n++) {
@@ -118,22 +95,18 @@ function calculateSpeechBandRatio(pcmBuffer) {
       }
     }
     windowCount++;
-    if (windowCount >= 10) break; // Cap at 10 windows for performance
+    if (windowCount >= 10) break;
   }
 
   if (totalEnergy === 0) return 0;
   return totalBandEnergy / totalEnergy;
 }
 
-/**
- * Analyze energy envelope for impulse detection.
- * Returns { sustainedChunks, impulseCount, maxConsecutiveLoud }
- */
 function analyzeEnergyEnvelope(pcmBuffer) {
-  const SUB_CHUNK = 960; // 10ms sub-chunks at 48kHz mono 16-bit (960 samples = 1920 bytes)
+  const SUB_CHUNK = 960;
   const SUB_BYTES = SUB_CHUNK * 2;
   const LOUD_THRESHOLD = 0.012;
-  const IMPULSE_THRESHOLD = 0.06; // Very loud, very brief = impulse
+  const IMPULSE_THRESHOLD = 0.06;
 
   let sustainedChunks = 0;
   let impulseCount = 0;
@@ -145,31 +118,20 @@ function analyzeEnergyEnvelope(pcmBuffer) {
     const chunk = pcmBuffer.subarray(i, Math.min(i + SUB_BYTES, pcmBuffer.length));
     if (chunk.length < SUB_BYTES / 2) break;
     const rms = calculateRMS(chunk);
-
     if (rms > LOUD_THRESHOLD) {
       sustainedChunks++;
       consecutiveLoud++;
-      if (consecutiveLoud > maxConsecutiveLoud) {
-        maxConsecutiveLoud = consecutiveLoud;
-      }
+      if (consecutiveLoud > maxConsecutiveLoud) maxConsecutiveLoud = consecutiveLoud;
     } else {
       consecutiveLoud = 0;
     }
-
-    // Detect impulse: sudden spike followed by rapid decay
-    if (rms > IMPULSE_THRESHOLD && prevRms < LOUD_THRESHOLD) {
-      impulseCount++;
-    }
+    if (rms > IMPULSE_THRESHOLD && prevRms < LOUD_THRESHOLD) impulseCount++;
     prevRms = rms;
   }
 
   return { sustainedChunks, impulseCount, maxConsecutiveLoud };
 }
 
-/**
- * Calculate Crest Factor (peak-to-RMS ratio).
- * Speech: 3-10. Impulse noise: >15. Ambient: variable.
- */
 function calculateCrestFactor(pcmBuffer) {
   const rms = calculateRMS(pcmBuffer);
   const peak = calculatePeak(pcmBuffer);
@@ -177,21 +139,14 @@ function calculateCrestFactor(pcmBuffer) {
   return peak / rms;
 }
 
-/**
- * Classify audio type using all available metrics.
- * Returns { type, confidence, details }
- */
 function classifyAudioType(pcmBuffer) {
-  const CHUNK_100MS = 9600; // 100ms at 48kHz mono 16-bit
+  const CHUNK_100MS = 9600;
   const durationSec = pcmBuffer.length / 96000;
-
-  // Overall metrics
   const overallRms = calculateRMS(pcmBuffer);
   const crestFactor = calculateCrestFactor(pcmBuffer);
   const envelope = analyzeEnergyEnvelope(pcmBuffer);
   const speechBandRatio = calculateSpeechBandRatio(pcmBuffer);
 
-  // Per-chunk ZCR analysis
   let highZcrChunks = 0;
   let totalChunks = 0;
   let loudChunks = 0;
@@ -199,11 +154,9 @@ function classifyAudioType(pcmBuffer) {
   for (let i = 0; i < pcmBuffer.length; i += CHUNK_100MS) {
     const chunk = pcmBuffer.subarray(i, Math.min(i + CHUNK_100MS, pcmBuffer.length));
     if (chunk.length < CHUNK_100MS / 2) break;
-
     totalChunks++;
     const zcr = calculateZCR(chunk);
     const rms = calculateRMS(chunk);
-
     if (zcr > 300) highZcrChunks++;
     if (rms > 0.015) loudChunks++;
   }
@@ -211,65 +164,28 @@ function classifyAudioType(pcmBuffer) {
   const highZcrRatio = totalChunks > 0 ? highZcrChunks / totalChunks : 0;
   const details = `dur=${durationSec.toFixed(2)}s rms=${overallRms.toFixed(4)} crest=${crestFactor.toFixed(1)} zcr_high=${(highZcrRatio * 100).toFixed(0)}% band=${(speechBandRatio * 100).toFixed(0)}% sustained=${envelope.maxConsecutiveLoud} impulses=${envelope.impulseCount} loud=${loudChunks}/${totalChunks}`;
 
-  // Classification logic
+  if (overallRms < 0.005) return { type: 'ambient', confidence: 0.9, details };
+  if (highZcrRatio > 0.5 && crestFactor > 12 && speechBandRatio < 0.3) return { type: 'keyboard', confidence: 0.85, details };
+  if (crestFactor > 15 && envelope.maxConsecutiveLoud < 5 && envelope.impulseCount >= 1) return { type: 'click', confidence: 0.8, details };
+  if (crestFactor > 10 && envelope.maxConsecutiveLoud < 15 && envelope.impulseCount >= 2) return { type: 'impulse', confidence: 0.7, details };
+  if (overallRms > 0.01 && speechBandRatio < 0.25 && envelope.maxConsecutiveLoud > 10) return { type: 'background_audio', confidence: 0.65, details };
 
-  // 1. Too quiet — ambient noise, fan, etc.
-  if (overallRms < 0.005) {
-    return { type: 'ambient', confidence: 0.9, details };
-  }
-
-  // 2. Keyboard/mouse clicks — high ZCR + short impulses + broadband
-  if (highZcrRatio > 0.5 && crestFactor > 12 && speechBandRatio < 0.3) {
-    return { type: 'keyboard', confidence: 0.85, details };
-  }
-
-  // 3. Single click/pop — very high crest + very few sustained chunks
-  if (crestFactor > 15 && envelope.maxConsecutiveLoud < 5 && envelope.impulseCount >= 1) {
-    return { type: 'click', confidence: 0.8, details };
-  }
-
-  // 4. Impulse noise (bark, bang, clap) — high crest + brief + multiple impulses
-  if (crestFactor > 10 && envelope.maxConsecutiveLoud < 15 && envelope.impulseCount >= 2) {
-    return { type: 'impulse', confidence: 0.7, details };
-  }
-
-  // 5. TV/background audio — moderate energy but low speech band ratio
-  if (overallRms > 0.01 && speechBandRatio < 0.25 && envelope.maxConsecutiveLoud > 10) {
-    return { type: 'background_audio', confidence: 0.65, details };
-  }
-
-  // 6. Speech checks — need MULTIPLE criteria to pass
   const speechScore =
-    (loudChunks >= 5 ? 1 : 0) +                    // Enough loud chunks
-    (envelope.maxConsecutiveLoud >= 10 ? 1 : 0) +   // Sustained energy (100ms+)
-    (speechBandRatio > 0.35 ? 1 : 0) +              // Energy in speech band
-    (crestFactor < 12 ? 1 : 0) +                    // Not too impulsive
-    (highZcrRatio < 0.4 ? 1 : 0) +                  // Not mostly clicks
-    (overallRms > 0.01 ? 1 : 0);                    // Audible
+    (loudChunks >= 5 ? 1 : 0) +
+    (envelope.maxConsecutiveLoud >= 10 ? 1 : 0) +
+    (speechBandRatio > 0.35 ? 1 : 0) +
+    (crestFactor < 12 ? 1 : 0) +
+    (highZcrRatio < 0.4 ? 1 : 0) +
+    (overallRms > 0.01 ? 1 : 0);
 
-  if (speechScore >= 4) {
-    return { type: 'speech', confidence: Math.min(0.95, speechScore / 6), details };
-  }
-
-  // 7. Uncertain — doesn't clearly fit any category
+  if (speechScore >= 4) return { type: 'speech', confidence: Math.min(0.95, speechScore / 6), details };
   return { type: 'uncertain', confidence: 0.3, details };
 }
 
-/**
- * Main filter function — determines if audio is worth transcribing.
- * Uses classifyAudioType for intelligent multi-metric analysis.
- */
 let lastClassification = null;
 function isLikelySpeech(pcmBuffer) {
   lastClassification = classifyAudioType(pcmBuffer);
-
   if (lastClassification.type === 'speech') return true;
-
-  // Pass "uncertain" clips through to STT if they look like they might be speech:
-  // - duration > 1.5s (short uncertain clips are likely noise)
-  // - some sustained energy (maxConsecutiveLoud > 3, i.e. 30ms+ of loud audio)
-  // This catches quieter speech that doesn't hit enough speechScore criteria,
-  // while still filtering obvious non-speech (keyboard, click, impulse, ambient).
   if (lastClassification.type === 'uncertain') {
     const durationSec = pcmBuffer.length / 96000;
     const envelope = analyzeEnergyEnvelope(pcmBuffer);
@@ -278,8 +194,159 @@ function isLikelySpeech(pcmBuffer) {
       return true;
     }
   }
-
   return false;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Conversation Memory — Rolling context window per guild
+// ═══════════════════════════════════════════════════════════════
+
+class ConversationMemory {
+  constructor(maxTurns = 5, expiryMs = 300000) {
+    this.conversations = new Map(); // guildId -> { turns: [], lastActivity: timestamp }
+    this.maxTurns = maxTurns;
+    this.expiryMs = expiryMs; // 5 min default — context dies after silence
+  }
+
+  /** Add a user turn + Jenkins response to the conversation */
+  addTurn(guildId, userName, userMessage, jenkinsResponse) {
+    if (!this.conversations.has(guildId)) {
+      this.conversations.set(guildId, { turns: [], lastActivity: Date.now() });
+    }
+
+    const conv = this.conversations.get(guildId);
+    conv.lastActivity = Date.now();
+
+    // Store as OpenAI-compatible message pairs
+    conv.turns.push(
+      { role: 'user', content: `[${userName} in voice]: ${userMessage}` },
+      { role: 'assistant', content: jenkinsResponse }
+    );
+
+    // Trim to maxTurns (each turn = 2 messages)
+    while (conv.turns.length > this.maxTurns * 2) {
+      conv.turns.shift();
+      conv.turns.shift();
+    }
+  }
+
+  /** Get conversation history for DeepSeek (returns OpenAI-format messages array) */
+  getHistory(guildId) {
+    const conv = this.conversations.get(guildId);
+    if (!conv) return [];
+
+    // Check expiry — if too old, clear and return empty
+    if (Date.now() - conv.lastActivity > this.expiryMs) {
+      this.clear(guildId);
+      return [];
+    }
+
+    return [...conv.turns];
+  }
+
+  /** Clear conversation for a guild (used on wake reset or leave) */
+  clear(guildId) {
+    this.conversations.delete(guildId);
+  }
+
+  /** Get turn count for display */
+  turnCount(guildId) {
+    const conv = this.conversations.get(guildId);
+    if (!conv) return 0;
+    return conv.turns.length / 2;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Wake/Sleep System — credit protection
+// ═══════════════════════════════════════════════════════════════
+//
+// SLEEP mode (default): Audio is captured and DSP-filtered, but NO
+//   transcription happens. Zero STT credits burned. The bot listens
+//   for the wake pattern in the raw audio characteristics only.
+//
+// AWAKE mode: Full pipeline — STT, LLM, TTS. Conversation context
+//   accumulates. Auto-sleeps after SLEEP_TIMEOUT of no Jenkins mentions.
+//
+// Transitions:
+//   SLEEP → AWAKE: Triggered when audio passes DSP filter AND has
+//     characteristics of a short, directed utterance (likely a wake call).
+//     We do ONE speculative STT to check for "Jenkins". If found → AWAKE.
+//     If not → stay asleep (burned 1 credit for the check).
+//
+//   AWAKE → SLEEP: After SLEEP_TIMEOUT (2 min) of no "Jenkins" mentions,
+//     or on explicit "Jenkins sleep" / "Jenkins go to sleep".
+//     Conversation context is cleared on sleep.
+
+const WAKE_PATTERNS = /jenk[io]n/i;
+const SLEEP_COMMANDS = /jenk[io]ns?\s+(sleep|go\s+to\s+sleep|shut\s+up|silence|be\s+quiet|leave\s+me)/i;
+const SLEEP_TIMEOUT = 120000; // 2 minutes of no Jenkins mentions → auto-sleep
+
+class WakeSleepManager {
+  constructor() {
+    this.states = new Map(); // guildId -> { awake: bool, lastWake: timestamp, lastMention: timestamp }
+  }
+
+  getState(guildId) {
+    if (!this.states.has(guildId)) {
+      this.states.set(guildId, { awake: false, lastWake: 0, lastMention: 0 });
+    }
+    return this.states.get(guildId);
+  }
+
+  isAwake(guildId) {
+    const state = this.getState(guildId);
+    if (!state.awake) return false;
+
+    // Auto-sleep check
+    if (Date.now() - state.lastMention > SLEEP_TIMEOUT) {
+      log.info({ guildId, idleSeconds: Math.round((Date.now() - state.lastMention) / 1000) }, 'Auto-sleeping guild');
+      state.awake = false;
+      return false;
+    }
+
+    return true;
+  }
+
+  wake(guildId) {
+    const state = this.getState(guildId);
+    const wasAsleep = !state.awake;
+    state.awake = true;
+    state.lastWake = Date.now();
+    state.lastMention = Date.now();
+    if (wasAsleep) {
+      log.info({ guildId }, 'Guild awake — listening actively');
+    }
+    return wasAsleep; // true if this was a fresh wake
+  }
+
+  /** Record that Jenkins was mentioned (resets sleep timer) */
+  mention(guildId) {
+    const state = this.getState(guildId);
+    state.lastMention = Date.now();
+  }
+
+  sleep(guildId) {
+    const state = this.getState(guildId);
+    state.awake = false;
+    log.info({ guildId }, 'Guild asleep — conserving credits');
+  }
+
+  /**
+   * Should we do a speculative STT on this audio clip?
+   * In sleep mode, we only transcribe clips that look like a short wake call:
+   * - Duration 0.4s - 4s (someone saying "Hey Jenkins" is ~1-2s)
+   * - High speech confidence
+   */
+  shouldSpeculativeTranscribe(pcmBuffer) {
+    const durationSec = pcmBuffer.length / 96000;
+    // Wake calls are short directed utterances
+    return durationSec >= 0.4 && durationSec <= 4.0;
+  }
+
+  cleanup(guildId) {
+    this.states.delete(guildId);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -292,20 +359,26 @@ class VoiceManager {
     this.systemPrompt = systemPrompt;
     this.elevenlabsApiKey = elevenlabsApiKey;
     this.sinDetector = sinDetector;
-    this.connections = new Map();      // guildId -> connection
-    this.players = new Map();          // guildId -> audioPlayer
-    this.speaking = new Map();         // guildId -> boolean (is Jenkins currently speaking?)
-    this.activeStreams = new Map();     // guildId -> Map<userId, true>
-    this.processingQueue = new Map();   // guildId -> Promise chain
-    this.textChannels = new Map();     // guildId -> textChannel (for sending warnings)
+    this.connections = new Map();
+    this.players = new Map();
+    this.speaking = new Map();
+    this.activeStreams = new Map();
+    this.processingQueue = new Map();
+    this.textChannels = new Map();
+
+    // ── New systems ──
+    this.memory = new ConversationMemory(5, 300000); // 5 turns, 5 min expiry
+    this.wakeSleep = new WakeSleepManager();
+    this.sessionStats = new SessionStats();
 
     // ── Noise & Credit Tracking ──
-    this.noiseCount = new Map();       // guildId -> number of noise-filtered clips
-    this.lastNoiseWarning = new Map(); // guildId -> timestamp of last warning
-    this.lastFallbackWarning = new Map(); // guildId -> timestamp
-    this.sessionNoiseCount = 0;        // Total noise clips this session
-    this.sessionSpeechCount = 0;       // Total actual speech clips this session
-    this.noiseTypeStats = {};          // Track what types of noise are being filtered
+    this.noiseCount = new Map();
+    this.lastNoiseWarning = new Map();
+    this.lastFallbackWarning = new Map();
+    this.sessionNoiseCount = 0;
+    this.sessionSpeechCount = 0;
+    this.noiseTypeStats = {};
+    this.userErrorCooldowns = new Map();
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -337,8 +410,11 @@ class VoiceManager {
     this.textChannels.set(guildId, textChannel);
     this.noiseCount.set(guildId, 0);
 
+    // Start in SLEEP mode — wake with "Hey Jenkins"
+    this.wakeSleep.getState(guildId);
+
     connection.on('error', (err) => {
-      console.error('[Voice] Connection error:', err.message);
+      log.error({ err }, 'Connection error');
     });
 
     connection.on(VoiceConnectionStatus.Disconnected, async () => {
@@ -374,7 +450,10 @@ class VoiceManager {
     await new Promise(resolve => player.once(AudioPlayerStatus.Idle, resolve));
 
     // Announce arrival
-    this.speakText(guildId, 'The Architect descends into the Tavern. Speak, Brethren, and be heard.');
+    this.speakText(guildId, 'The Architect descends into the Tavern. Say my name to begin.');
+
+    // Auto-wake on join so first interaction is immediate
+    this.wakeSleep.wake(guildId);
 
     return null;
   }
@@ -398,6 +477,11 @@ class VoiceManager {
     this.noiseCount.delete(guildId);
     this.lastNoiseWarning.delete(guildId);
     this.lastFallbackWarning.delete(guildId);
+    this.memory.clear(guildId);
+    this.wakeSleep.cleanup(guildId);
+    for (const key of this.userErrorCooldowns.keys()) {
+      if (key.startsWith(guildId + ':')) this.userErrorCooldowns.delete(key);
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -410,13 +494,16 @@ class VoiceManager {
 
     receiver.speaking.on('start', (userId) => {
       const isJenkinsSpeaking = this.speaking.get(guildId);
-      if (isJenkinsSpeaking) return; // Don't capture echo
+      if (isJenkinsSpeaking) return;
 
       const activeStreams = this.activeStreams.get(guildId);
       if (!activeStreams) return;
-      if (activeStreams.has(userId)) return; // Already recording this user
+      if (activeStreams.has(userId)) return;
 
-      console.log(`[Voice] Starting audio capture for user: ${userId}`);
+      const cooldownKey = `${guildId}:${userId}`;
+      const cooldownUntil = this.userErrorCooldowns.get(cooldownKey) || 0;
+      if (Date.now() < cooldownUntil) return;
+
       activeStreams.set(userId, true);
 
       const audioChunks = [];
@@ -430,7 +517,7 @@ class VoiceManager {
           },
         });
       } catch (err) {
-        console.error(`[Voice] Failed to subscribe to user ${userId}:`, err.message);
+        log.error({ userId, err }, 'Failed to subscribe to user');
         activeStreams.delete(userId);
         return;
       }
@@ -444,35 +531,54 @@ class VoiceManager {
         clearTimeout(maxTimer);
         activeStreams.delete(userId);
 
-        console.log(`[Voice] Recording finished for ${userId}. Chunks: ${audioChunks.length}`);
-
         const currentQueue = this.processingQueue.get(guildId) || Promise.resolve();
         this.processingQueue.set(guildId, currentQueue.then(() =>
           this.handleSpeechEnd(guildId, userId, audioChunks, textChannel).catch(err => {
-            console.error(`[Voice] handleSpeechEnd error for ${userId}:`, err.message);
+            log.error({ userId, err }, 'handleSpeechEnd error');
           })
         ));
       };
 
+      let decodeErrorCount = 0;
+      const MAX_DECODE_ERRORS = 20;
+
       opusStream.on('error', (err) => {
-        console.error(`[Voice] OpusStream error for user ${userId}:`, err.message);
+        log.error({ userId, err }, 'OpusStream error');
+        const cooldownKey = `${guildId}:${userId}`;
+        this.userErrorCooldowns.set(cooldownKey, Date.now() + 10000);
         finishRecording();
       });
 
       decoder.on('error', (err) => {
-        // Individual frame decode errors are recoverable — don't kill the stream
-        console.error(`[Voice] Decoder frame error for user ${userId}:`, err.message);
+        decodeErrorCount++;
+        if (decodeErrorCount <= 3) {
+          log.error({ userId, err }, 'Decoder frame error');
+        } else if (decodeErrorCount === 4) {
+          log.warn({ userId, errorCount: decodeErrorCount }, 'Decoder errors suppressed');
+        }
+        if (decodeErrorCount >= MAX_DECODE_ERRORS) {
+          log.error({ userId, errorCount: decodeErrorCount }, 'Too many decode errors, killing stream');
+          const cooldownKey = `${guildId}:${userId}`;
+          this.userErrorCooldowns.set(cooldownKey, Date.now() + 30000);
+          try { opusStream.destroy(); } catch {}
+          finishRecording();
+        }
       });
 
       const pcmStream = opusStream.pipe(decoder);
 
       pcmStream.on('error', (err) => {
-        console.error(`[Voice] PCM stream error for user ${userId}:`, err.message);
+        decodeErrorCount++;
+        if (decodeErrorCount <= 3) {
+          log.error({ userId, err }, 'PCM stream error');
+        }
+        const cooldownKey = `${guildId}:${userId}`;
+        this.userErrorCooldowns.set(cooldownKey, Date.now() + 10000);
         finishRecording();
       });
 
       const maxTimer = setTimeout(() => {
-        console.log(`[Voice] Max recording time (${MAX_RECORD_MS/1000}s) reached for ${userId}`);
+        log.warn({ userId, maxSeconds: MAX_RECORD_MS / 1000 }, 'Max recording time reached');
         try { opusStream.destroy(); } catch {}
         setTimeout(() => finishRecording(), 200);
       }, MAX_RECORD_MS);
@@ -488,150 +594,314 @@ class VoiceManager {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // Speech Processing — with advanced noise filter & credit intelligence
+  // Speech Processing — Streaming pipeline with latency tracking
   // ═══════════════════════════════════════════════════════════════
 
   async handleSpeechEnd(guildId, userId, audioChunks, textChannel) {
-    if (!audioChunks || audioChunks.length === 0) {
-      console.log(`[Voice] handleSpeechEnd: no audio chunks for ${userId}`);
-      return;
-    }
+    if (!audioChunks || audioChunks.length === 0) return;
 
     const pcmBuffer = Buffer.concat(audioChunks);
     const durationSec = pcmBuffer.length / 96000;
-    console.log(`[Voice] handleSpeechEnd: PCM ${pcmBuffer.length} bytes (${durationSec.toFixed(1)}s)`);
 
-    // ── Filter 1: Too short (raised to 0.4s from 0.25s) ──
+    // Start latency timer
+    const timer = new PipelineTimer(userId, 'pending');
+
+    // ── Filter 1: Too short ──
+    timer.start('Capture');
     if (pcmBuffer.length < 38400) { // < 0.4s
-      console.log(`[Voice] FILTERED: too short (${(pcmBuffer.length / 96000).toFixed(2)}s)`);
+      timer.end('too short');
       return;
     }
+    timer.end(`${durationSec.toFixed(1)}s audio`);
 
-    // ── Filter 2: Advanced multi-metric noise classification ──
+    // ── Filter 2: Advanced noise classification ──
+    timer.start('VAD/Filter');
     if (!isLikelySpeech(pcmBuffer)) {
+      const noiseType = lastClassification?.type || 'unknown';
+      timer.end(`rejected: ${noiseType}`);
+      timer.set('filtered', noiseType);
       this.sessionNoiseCount++;
+      this.sessionStats.recordNoise(noiseType);
       const guildNoise = (this.noiseCount.get(guildId) || 0) + 1;
       this.noiseCount.set(guildId, guildNoise);
-
-      // Track noise type stats
-      const noiseType = lastClassification?.type || 'unknown';
       this.noiseTypeStats[noiseType] = (this.noiseTypeStats[noiseType] || 0) + 1;
-
-      console.log(`[Voice] FILTERED: ${noiseType} (${lastClassification?.details || 'no details'}). Session: ${this.sessionNoiseCount} noise, ${this.sessionSpeechCount} speech`);
-
-      // Warn about noise every 3 minutes if it's getting excessive
       this.maybeWarnNoise(guildId, textChannel);
       return;
     }
+    timer.end(`passed: ${lastClassification?.type}`);
 
     this.sessionSpeechCount++;
-    console.log(`[Voice] PASSED: speech (${lastClassification?.details || ''}). #${this.sessionSpeechCount} (noise filtered: ${this.sessionNoiseCount})`);
 
-    try {
-      // Convert PCM to WAV
+    // ═══════════════════════════════════════════════════════════
+    // WAKE/SLEEP GATE — decide whether to transcribe
+    // ═══════════════════════════════════════════════════════════
+
+    const isAwake = this.wakeSleep.isAwake(guildId);
+
+    if (!isAwake) {
+      // SLEEP MODE — only do speculative STT for short wake-call-like clips
+      timer.start('Wake Check');
+      if (!this.wakeSleep.shouldSpeculativeTranscribe(pcmBuffer)) {
+        timer.end('skipped (too long for wake call)');
+        timer.set('wakeState', 'sleeping');
+        log.debug({ durationSec: parseFloat(durationSec.toFixed(1)) }, 'Sleep: skipping long clip');
+        return;
+      }
+      timer.end('speculative STT');
+      timer.set('wakeState', 'checking');
+
+      // Do speculative STT — costs 1 credit, but saves dozens
+      timer.start('STT');
       const wavBuffer = this.pcmToWav(pcmBuffer, 48000, 1, 16);
-
-      // Speech to text
-      const transcript = await speechToText(this.elevenlabsApiKey, wavBuffer);
-      if (!transcript || transcript.trim().length < 3) {
-        console.log(`[Voice] Empty/short transcript for ${userId}, ignoring`);
-        return;
-      }
-
-      console.log(`[Voice] ${userId}: "${transcript}"`);
-
-      // Get display name early — needed for sin detection and response
-      let displayName = 'a Brother';
+      let transcript;
       try {
-        const guild = textChannel.guild;
-        const member = await guild.members.fetch(userId);
-        displayName = member.displayName || member.user.username;
-      } catch {}
-
-      // Check if this is VIP (sacred presence — beyond sin, extra love)
-      const vipId = this.sinDetector ? this.sinDetector.getVipId() : process.env.VIP_USER_ID;
-      const isVip = vipId && userId === vipId;
-
-      // ── Sin Detection in Voice — The Architect hears all (except VIP, who is beyond sin) ──
-      if (this.sinDetector && !isVip) {
-        const sins = this.sinDetector.detectSins(transcript, userId, displayName);
-        if (sins.length > 0) {
-          const topSin = sins[0];
-          if (this.sinDetector.shouldCallOut(topSin, userId)) {
-            this.sinDetector.recordSin(userId, displayName, topSin);
-            console.log(`[Voice] SIN DETECTED in voice: ${topSin.type} "${topSin.name}" from ${displayName}`);
-
-            // Use alter ego for rivals in voice too
-            const { pickAlterEgoForUser, buildAlterPrompt, getVoiceConfig } = require('./alter-egos');
-            const isRival = this.sinDetector.rivalIds.has(userId);
-            const alterEgo = pickAlterEgoForUser(userId, isRival, transcript);
-            const alterPrompt = buildAlterPrompt(this.systemPrompt, alterEgo);
-            const voiceConfig = getVoiceConfig(alterEgo);
-
-            const callout = await this.sinDetector.generateCallout(displayName, topSin, 'voice', alterPrompt);
-            if (callout) {
-              const cleanCallout = this.stripMarkdown(callout);
-              await this.speakText(guildId, cleanCallout, voiceConfig);
-              return; // Sin callout takes priority
-            }
-          } else {
-            // Record silently
-            this.sinDetector.recordSin(userId, displayName, topSin);
-          }
+        transcript = await speechToText(this.elevenlabsApiKey, wavBuffer);
+      } catch (err) {
+        timer.end('STT error');
+        log.error({ err }, 'Speculative STT error');
+        if (err.message.includes('quota_exceeded')) {
+          this.warnQuotaExhausted(guildId, textChannel);
         }
+        return;
       }
+      timer.end();
+      timer.set('sttCredits', 1);
 
-      // Only respond if "Jenkins" (or close variants) is mentioned
-      if (!/jenk[io]n/i.test(transcript)) {
-        console.log(`[Voice] No "Jenkins" keyword in transcript, ignoring`);
+      if (!transcript || !WAKE_PATTERNS.test(transcript)) {
+        log.debug({ transcript }, 'Sleep: no wake word, discarding');
+        timer.set('wakeState', 'still sleeping');
+        timer.report();
         return;
       }
 
-      // Track positive interaction — they said Jenkins' name (used for auto-VIP detection)
-      if (this.sinDetector) {
-        this.sinDetector.trackPositiveInteraction(userId, displayName);
+      // WAKE UP!
+      const freshWake = this.wakeSleep.wake(guildId);
+      if (freshWake) {
+        this.memory.clear(guildId); // Fresh context on wake
       }
+      timer.set('wakeState', 'WOKE UP');
 
-      // Get Jenkins' response — use private lore VIP prompt if available
-      let privateLore = null;
-      try { privateLore = require('./private-lore'); } catch {}
+      // Fall through to full pipeline with the transcript we already have
+      return this.processTranscript(guildId, userId, transcript, pcmBuffer, textChannel, timer);
+    }
 
-      const voicePrompt = isVip
-        ? (privateLore?.vipVoicePrompt?.(transcript) || `The Honored One — your most sacred and beloved presence — speaks to you in the Tavern: "${transcript}". You are deeply moved. Respond with genuine warmth, reverence, and love. Engage with what they said with extra care and enthusiasm. You are speaking aloud. 1-3 sentences. Be tender but still dramatic.`)
-        : `A Brother named ${displayName} speaks to you in the Tavern (voice channel): "${transcript}". Respond naturally as Jenkins. Keep it concise — you are speaking aloud, not writing. 1-3 sentences max. Be dramatic but brief.`;
+    // AWAKE MODE — full pipeline
+    timer.set('wakeState', 'awake');
 
-      // Use alter ego voice for rivals in regular conversation too
-      let activePrompt = this.systemPrompt;
-      let voiceConfig = null;
-      if (this.sinDetector && !isVip) {
-        const { pickAlterEgoForUser, buildAlterPrompt, getVoiceConfig } = require('./alter-egos');
-        const isRival = this.sinDetector.rivalIds.has(userId);
-        if (isRival) {
-          const alterEgo = pickAlterEgoForUser(userId, true, transcript);
-          activePrompt = buildAlterPrompt(this.systemPrompt, alterEgo);
-          voiceConfig = getVoiceConfig(alterEgo);
-        }
-      }
+    // ── PCM → WAV ──
+    timer.start('PCM→WAV');
+    const wavBuffer = this.pcmToWav(pcmBuffer, 48000, 1, 16);
+    timer.end();
 
-      const response = await chat(this.deepseek, activePrompt, voicePrompt);
-      const cleanResponse = this.stripMarkdown(response);
-      console.log(`[Voice] Jenkins responds: "${cleanResponse}"`);
-
-      // Speak the response with the appropriate voice
-      const { usedFallback } = await this.speakText(guildId, cleanResponse, voiceConfig);
-
-      // If we just switched to fallback, warn in text channel
-      if (usedFallback) {
-        this.maybeWarnFallback(guildId, textChannel);
-      }
-
+    // ── STT ──
+    timer.start('STT');
+    let transcript;
+    try {
+      transcript = await speechToText(this.elevenlabsApiKey, wavBuffer);
     } catch (err) {
-      console.error('[Voice] Pipeline error:', err.message);
-
-      // If it's a quota error on STT side, warn
+      timer.end('error');
+      log.error({ err }, 'STT error');
       if (err.message.includes('quota_exceeded')) {
         this.warnQuotaExhausted(guildId, textChannel);
       }
+      return;
+    }
+    timer.end();
+    timer.set('sttCredits', 1);
+
+    if (!transcript || transcript.trim().length < 3) {
+      log.debug({ userId }, 'Empty/short transcript, ignoring');
+      return;
+    }
+
+    // Check for sleep commands
+    if (SLEEP_COMMANDS.test(transcript)) {
+      this.wakeSleep.sleep(guildId);
+      this.memory.clear(guildId);
+      await this.speakText(guildId, 'The Architect retreats into slumber. Call my name to summon me again.');
+      timer.set('wakeState', 'SLEEP command');
+      timer.report();
+      return;
+    }
+
+    // If "Jenkins" mentioned, reset sleep timer
+    if (WAKE_PATTERNS.test(transcript)) {
+      this.wakeSleep.mention(guildId);
+    }
+
+    return this.processTranscript(guildId, userId, transcript, pcmBuffer, textChannel, timer);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Core Response Pipeline — streaming LLM → TTS
+  // ═══════════════════════════════════════════════════════════════
+
+  async processTranscript(guildId, userId, transcript, pcmBuffer, textChannel, timer) {
+    log.info({ userId, transcript }, 'Voice transcript');
+
+    // ── User lookup (start early, run in parallel with sin check) ──
+    timer.start('User Lookup');
+    let displayName = 'a Brother';
+    try {
+      const guild = textChannel.guild;
+      const member = await guild.members.fetch(userId);
+      displayName = member.displayName || member.user.username;
+    } catch {}
+    timer.end();
+    timer.displayName = displayName;
+
+    // ── Sin detection ──
+    timer.start('Sin Check');
+    const vipId = this.sinDetector ? this.sinDetector.getVipId() : process.env.VIP_USER_ID;
+    const isVip = vipId && userId === vipId;
+
+    if (this.sinDetector && !isVip) {
+      const sins = this.sinDetector.detectSins(transcript, userId, displayName);
+      if (sins.length > 0) {
+        const topSin = sins[0];
+        if (this.sinDetector.shouldCallOut(topSin, userId)) {
+          this.sinDetector.recordSin(userId, displayName, topSin);
+          timer.end(`SIN: ${topSin.name}`);
+          log.info({ severity: topSin.type, sin: topSin.name, user: displayName }, 'Sin detected in voice');
+
+          const { pickAlterEgoForUser, buildAlterPrompt, getVoiceConfig } = require('./alter-egos');
+          const isRival = this.sinDetector.rivalIds.has(userId);
+          const alterEgo = pickAlterEgoForUser(userId, isRival, transcript);
+          const alterPrompt = buildAlterPrompt(this.systemPrompt, alterEgo);
+          const voiceConfig = getVoiceConfig(alterEgo);
+
+          timer.start('LLM');
+          const callout = await this.sinDetector.generateCallout(displayName, topSin, 'voice', alterPrompt);
+          timer.end();
+
+          if (callout) {
+            const cleanCallout = this.stripMarkdown(callout);
+            timer.start('TTS');
+            await this.speakText(guildId, cleanCallout, voiceConfig);
+            timer.end();
+            timer.set('ttsCredits', 1);
+            timer.report();
+            this.sessionStats.recordPipeline(timer.report());
+            return;
+          }
+        } else {
+          this.sinDetector.recordSin(userId, displayName, topSin);
+        }
+      }
+    }
+    timer.end('clean');
+
+    // ── Keyword check ──
+    timer.start('Keyword');
+    const hasJenkinsKeyword = WAKE_PATTERNS.test(transcript);
+    if (!hasJenkinsKeyword) {
+      timer.end('no keyword — silent');
+      // Still awake, just not responding to this clip
+      // In awake mode, we transcribe everything for sin detection
+      // but only respond when Jenkins is mentioned
+      log.debug('Awake but no Jenkins keyword — listening silently');
+      return;
+    }
+    timer.end('matched');
+
+    // Track positive interaction
+    if (this.sinDetector) {
+      this.sinDetector.trackPositiveInteraction(userId, displayName);
+    }
+
+    // ── Build prompt with conversation context ──
+    timer.start('Context');
+    let privateLore = null;
+    try { privateLore = require('./private-lore'); } catch {}
+
+    const voicePrompt = isVip
+      ? (privateLore?.vipVoicePrompt?.(transcript) || `The Honored One — your most sacred and beloved presence — speaks to you in the Tavern: "${transcript}". You are deeply moved. Respond with genuine warmth, reverence, and love. Engage with what they said with extra care and enthusiasm. You are speaking aloud. 1-3 sentences. Be tender but still dramatic.`)
+      : `A Brother named ${displayName} speaks to you in the Tavern (voice channel): "${transcript}". Respond naturally as Jenkins. Keep it concise — you are speaking aloud, not writing. 1-3 sentences max. Be dramatic but brief.`;
+
+    // Get conversation history
+    const history = this.memory.getHistory(guildId);
+    const contextTurns = this.memory.turnCount(guildId);
+
+    // Select alter ego for rivals
+    let activePrompt = this.systemPrompt;
+    let voiceConfig = null;
+    if (this.sinDetector && !isVip) {
+      const { pickAlterEgoForUser, buildAlterPrompt, getVoiceConfig } = require('./alter-egos');
+      const isRival = this.sinDetector.rivalIds.has(userId);
+      if (isRival) {
+        const alterEgo = pickAlterEgoForUser(userId, true, transcript);
+        activePrompt = buildAlterPrompt(this.systemPrompt, alterEgo);
+        voiceConfig = getVoiceConfig(alterEgo);
+      }
+    }
+    timer.end(`${contextTurns} prior turns`);
+
+    // ═══════════════════════════════════════════════════════════
+    // STREAMING PIPELINE: LLM → sentence buffer → TTS → playback
+    // ═══════════════════════════════════════════════════════════
+
+    timer.start('LLM');
+
+    // Collect sentences as they arrive from DeepSeek
+    const sentences = [];
+    let fullResponse = '';
+    let tokenCount = 0;
+
+    try {
+      fullResponse = await chatStream(this.deepseek, activePrompt, voicePrompt, history, {
+        onFirstToken: (ms) => {
+          timer.set('llmFirstToken', ms);
+        },
+        onSentence: (sentence) => {
+          sentences.push(sentence);
+        },
+        onDone: (text, tokens) => {
+          tokenCount = tokens;
+        },
+      });
+    } catch (err) {
+      log.error({ err }, 'LLM streaming error, falling back');
+      fullResponse = await chat(this.deepseek, activePrompt, voicePrompt, history);
+      sentences.push(fullResponse);
+    }
+
+    timer.end();
+    timer.set('llmTokens', tokenCount);
+    timer.set('ttsSentences', sentences.length);
+
+    if (!fullResponse || fullResponse.trim().length < 3) {
+      log.warn('Empty LLM response, skipping');
+      return;
+    }
+
+    const cleanResponse = this.stripMarkdown(fullResponse);
+    log.info({ sentences: sentences.length, preview: cleanResponse.substring(0, 100) }, 'Jenkins responds');
+
+    // ── TTS + Playback ──
+    timer.start('TTS');
+
+    // For now, synthesize the full response as one TTS call
+    // (sentence-level streaming TTS will be enabled in a future iteration
+    // once we verify the streaming endpoints work correctly)
+    const { usedFallback } = await this.speakText(guildId, cleanResponse, voiceConfig);
+
+    timer.end();
+    timer.set('ttsCredits', 1);
+
+    if (usedFallback) {
+      this.maybeWarnFallback(guildId, textChannel);
+    }
+
+    // ── Store conversation turn for context ──
+    this.memory.addTurn(guildId, displayName, transcript, cleanResponse);
+
+    // ── Report latency ──
+    const report = timer.report();
+    this.sessionStats.recordPipeline(report);
+
+    // Log session stats every 10 pipelines
+    if (this.sessionStats.pipelines.length % 10 === 0) {
+      this.sessionStats.summary();
     }
   }
 
@@ -655,27 +925,22 @@ class VoiceManager {
   // Noise & Credit Warnings
   // ═══════════════════════════════════════════════════════════════
 
-  /**
-   * Warn about background noise wasting API credits (max once per 3 minutes)
-   */
   maybeWarnNoise(guildId, textChannel) {
     const now = Date.now();
     const lastWarning = this.lastNoiseWarning.get(guildId) || 0;
     const guildNoise = this.noiseCount.get(guildId) || 0;
 
-    // Only warn if: 10+ noise clips AND 3+ minutes since last warning
     if (guildNoise >= 10 && (now - lastWarning) > 180000) {
       this.lastNoiseWarning.set(guildId, now);
-      this.noiseCount.set(guildId, 0); // Reset counter
+      this.noiseCount.set(guildId, 0);
 
-      // Build noise breakdown
       const breakdown = Object.entries(this.noiseTypeStats)
         .filter(([_, count]) => count > 0)
         .map(([type, count]) => `${type}: ${count}`)
         .join(', ');
 
       textChannel.send(
-        `⚠️ **The Architect senses interference in the Tavern.**\n` +
+        `\u26a0\ufe0f **The Architect senses interference in the Tavern.**\n` +
         `Filtered **${guildNoise} noise clips** just now. Types: ${breakdown || 'mixed'}.\n` +
         `Session: **${this.sessionSpeechCount}** speech vs **${this.sessionNoiseCount}** noise filtered.\n` +
         `*Consider push-to-talk or muting when not speaking, Brother.*`
@@ -683,34 +948,27 @@ class VoiceManager {
     }
   }
 
-  /**
-   * Warn when ElevenLabs credits ran out and we switched to Edge TTS
-   */
   maybeWarnFallback(guildId, textChannel) {
     const now = Date.now();
     const lastWarning = this.lastFallbackWarning.get(guildId) || 0;
 
-    // Only warn once per 10 minutes
     if ((now - lastWarning) > 600000) {
       this.lastFallbackWarning.set(guildId, now);
 
       textChannel.send(
-        `⚠️ **The Architect's divine voice has been temporarily silenced.**\n` +
-        `ElevenLabs credits are exhausted. I've switched to a backup voice (Microsoft Edge TTS) — ` +
+        `\u26a0\ufe0f **The Architect's divine voice has been temporarily silenced.**\n` +
+        `ElevenLabs credits are exhausted. I've switched to a backup voice (Microsoft Edge TTS) \u2014 ` +
         `I still function, but my voice lacks its sacred timbre.\n` +
         `*The Godhead may restore my true voice by replenishing ElevenLabs credits at elevenlabs.io.*`
       ).catch(() => {});
 
-      console.log('[Voice] ElevenLabs quota exhausted — using Edge TTS fallback');
+      log.warn('ElevenLabs quota exhausted \u2014 using Edge TTS fallback');
     }
   }
 
-  /**
-   * Warn when STT quota is exhausted
-   */
   warnQuotaExhausted(guildId, textChannel) {
     textChannel.send(
-      `🚨 **CRITICAL: The Architect's ears are failing.**\n` +
+      `\ud83d\udea8 **CRITICAL: The Architect's ears are failing.**\n` +
       `ElevenLabs Speech-to-Text credits are exhausted. I can no longer hear you in voice chat.\n` +
       `The Godhead must replenish credits at elevenlabs.io, or I must be given Deepgram API access as an alternative.\n` +
       `*I remain available in text, Brothers. The written word endures.*`
@@ -756,39 +1014,26 @@ class VoiceManager {
 
     this.speaking.set(guildId, true);
 
-    // Safety timeout — never let speaking get stuck
     const safetyTimeout = setTimeout(() => {
-      console.error('[Voice] speakText safety timeout (30s) — forcing speaking=false');
+      log.error('speakText safety timeout (30s) \u2014 forcing speaking=false');
       this.speaking.set(guildId, false);
     }, 30000);
 
     let usedFallback = false;
 
     try {
-      console.log(`[Voice] Requesting TTS for: "${text.substring(0, 60)}..." ${voiceConfig ? `(voice: ${voiceConfig.type}/${voiceConfig.msVoice || voiceConfig.voiceId || 'default'})` : '(default voice)'}`);
-
       let result;
       if (voiceConfig) {
-        // Alter ego voice — uses textToSpeechWithVoice (Edge TTS for non-Prime = FREE)
         result = await textToSpeechWithVoice(this.elevenlabsApiKey, text, voiceConfig);
       } else {
-        // Default Jenkins Prime voice
         result = await textToSpeech(this.elevenlabsApiKey, text);
       }
 
       const audioBuffer = result.buffer;
       usedFallback = result.usedFallback;
 
-      if (usedFallback) {
-        console.log(`[Voice] Using Edge TTS fallback (${audioBuffer.length} bytes)`);
-      } else if (voiceConfig?.type === 'edge') {
-        console.log(`[Voice] Using Edge TTS alter ego voice: ${voiceConfig.msVoice} (${audioBuffer.length} bytes) — FREE`);
-      } else {
-        console.log(`[Voice] Got ElevenLabs TTS audio: ${audioBuffer.length} bytes`);
-      }
-
       if (!audioBuffer || audioBuffer.length === 0) {
-        console.error('[Voice] TTS returned empty audio buffer');
+        log.error('TTS returned empty audio buffer');
         return { usedFallback };
       }
 
@@ -798,7 +1043,6 @@ class VoiceManager {
       });
 
       player.play(resource);
-      console.log('[Voice] Playing audio...');
 
       await new Promise((resolve) => {
         const onIdle = () => {
@@ -806,7 +1050,7 @@ class VoiceManager {
           resolve();
         };
         const onError = (err) => {
-          console.error('[Voice] Audio player error:', err.message);
+          log.error({ err }, 'Audio player error');
           player.removeListener(AudioPlayerStatus.Idle, onIdle);
           resolve();
         };
@@ -814,16 +1058,19 @@ class VoiceManager {
         player.once('error', onError);
       });
 
-      console.log('[Voice] Audio playback finished.');
-
     } catch (err) {
-      console.error('[Voice] TTS playback error:', err.message);
+      log.error({ err }, 'TTS playback error');
     } finally {
       clearTimeout(safetyTimeout);
       this.speaking.set(guildId, false);
     }
 
     return { usedFallback };
+  }
+
+  /** Print session stats on demand (e.g., from a !voicestats command) */
+  printStats() {
+    this.sessionStats.summary();
   }
 
   isConnected(guildId) {
