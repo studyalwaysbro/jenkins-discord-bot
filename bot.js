@@ -561,9 +561,9 @@ client.on(Events.MessageCreate, async (message) => {
   const isMentioned = message.mentions.has(client.user);
   const isDM = !message.guild;
 
-  // --- VIP special treatment: The sacred presence ---
+  // --- VIP special treatment: The sacred presence (skip if command) ---
   const currentVipMsg = getVipUserId();
-  if (currentVipMsg && message.author.id === currentVipMsg) {
+  if (currentVipMsg && message.author.id === currentVipMsg && !content.startsWith('!')) {
     const cooldownKey = message.channel.id;
     if (!isOnCooldown(vipMessageCooldowns, cooldownKey, MESSAGE_COOLDOWN)) {
       // 50% static response, 50% dynamic heartfelt response
