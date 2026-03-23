@@ -1,0 +1,87 @@
+name: Jenkins CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint-and-check:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20, 22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check all JS files
+        run: |
+          echo "Checking syntax..."
+          find . -name '*.js' -not -path './node_modules/*' -not -path './.git/*' | while read f; do
+            node -c "$f" || exit 1
+          done
+          echo "All files passed syntax check"
+
+      - name: Check required modules load
+        run: |
+          node -e "
+            const modules = [
+              './logger', './db', './safe-write', './deepseek',
+              './economy', './sins', './predictions', './game-night',
+              './starboard', './sermons', './mood', './dream-journal',
+              './sound-effects', './achievements', './duels',
+              './alter-egos', './hot-takes', './personality',
+              './council', './knowledge', './markov',
+              './achievement-card', './charts',
+              './silero-vad', './webhook-theater',
+            ];
+            let failed = 0;
+            for (const m of modules) {
+              try {
+                require(m);
+                console.log('  ✓', m);
+              } catch (e) {
+                console.error('  ✗', m, '—', e.message);
+                failed++;
+              }
+            }
+            if (failed > 0) {
+              console.error(failed + ' module(s) failed to load');
+              process.exit(1);
+            }
+            console.log('All modules loaded successfully');
+          "
+
+      - name: Verify SQLite database initializes
+        run: |
+          node -e "
+            const { db, dbRead, dbWrite } = require('./db');
+            dbWrite('ci_test', { ok: true, ts: Date.now() });
+            const data = dbRead('ci_test', null);
+            if (!data || !data.ok) throw new Error('SQLite read/write failed');
+            console.log('SQLite OK');
+            db.close();
+          "
+
+      - name: Verify Silero VAD model exists
+        run: test -f models/silero_vad.onnx && echo "Model OK" || echo "::warning::Silero VAD model missing"
+
+      - name: Verify knowledge base loads
+        run: |
+          node -e "
+            const { getStats } = require('./knowledge');
+            const stats = getStats();
+            console.log('Knowledge base:', stats.total, 'chunks');
+            if (stats.total === 0) console.log('::warning::Knowledge base is empty');
+          "
