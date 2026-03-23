@@ -3,13 +3,11 @@
 // Pay Torch Coins to request Jenkins deliver a sermon on any topic.
 // Four tiers: whisper, homily, sermon, prophecy.
 
-const path = require('path');
 const { EmbedBuilder } = require('discord.js');
 const { chat } = require('./deepseek');
-const { safeWriteJSON, safeReadJSON, PrunedMap } = require('./safe-write');
+const { PrunedMap } = require('./safe-write');
+const { dbRead, dbWrite } = require('./db');
 const log = require('./logger').child('Sermons');
-
-const DATA_FILE = path.join(__dirname, 'data', 'sermons.json');
 const SAVE_INTERVAL = 5 * 60 * 1000;
 const MAX_SERMONS = 100;
 const GLOBAL_RATE_LIMIT = 6; // per hour
@@ -39,14 +37,14 @@ class SermonSystem {
     this.systemPrompt = systemPrompt;
     this.economy = economy;
     this.mood = mood;
-    this.data = safeReadJSON(DATA_FILE, () => ({ sermons: [], idCounter: 0, globalHourStart: 0, globalCount: 0 }));
+    this.data = dbRead('sermons', { sermons: [], idCounter: 0, globalHourStart: 0, globalCount: 0 });
     this.cooldowns = new PrunedMap(3600000, 600000); // prune hourly, entries expire in 10min
 
     setInterval(() => this.save(), SAVE_INTERVAL);
     log.info({ sermonCount: this.data.sermons.length }, 'Pulpit open');
   }
 
-  save() { safeWriteJSON(DATA_FILE, this.data); }
+  save() { dbWrite('sermons', this.data); }
 
   // ═══════════════════════════════════════════════════════════════
   // Request a Sermon

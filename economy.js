@@ -3,12 +3,9 @@
 //  "Jenkins is the house. The house always wins."
 // ═══════════════════════════════════════════════════════════════
 
-const path = require('path');
 const { EmbedBuilder } = require('discord.js');
 const log = require('./logger').child('Economy');
-const { safeWriteJSON, safeReadJSON } = require('./safe-write');
-
-const DATA_FILE = path.join(__dirname, 'data', 'economy.json');
+const { dbRead, dbWrite } = require('./db');
 const CHAT_COOLDOWN = 60_000; // 1 min between chat earnings
 const DAILY_AMOUNT = 500;
 const CHAT_EARN = { min: 5, max: 25 };
@@ -35,11 +32,11 @@ class Economy {
   }
 
   load() {
-    return safeReadJSON(DATA_FILE, {});
+    return dbRead('economy', {});
   }
 
   save() {
-    safeWriteJSON(DATA_FILE, this.data);
+    dbWrite('economy', this.data);
   }
 
   getUser(userId) {

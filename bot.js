@@ -3,7 +3,7 @@
 require('dotenv').config();
 
 const { Client, GatewayIntentBits, Events, Partials, ChannelType, EmbedBuilder } = require('discord.js');
-const { createClient, chat, chatStream } = require('./deepseek');
+const { createClient, chat, chatStream, chatWithTools, registerToolModules } = require('./deepseek');
 const { VoiceManager } = require('./voice');
 const { SinDetector } = require('./sins');
 const { pickAlterEgoForUser, buildAlterPrompt, getVoiceConfig } = require('./alter-egos');
@@ -18,6 +18,12 @@ const { DuelSystem } = require('./duels');
 const { PredictionMarket } = require('./predictions');
 const { checkAndAnnounce, getVersion } = require('./version-announce');
 const { GameNightUI } = require('./game-night-ui');
+const { conveneCouncil } = require('./council');
+const { search: kbSearch, getStats: kbStats } = require('./knowledge');
+const { WebhookTheater } = require('./webhook-theater');
+const { generateCardAttachment } = require('./achievement-card');
+const { leaderboardChart, userStatsRadar, moodChart, winLossChart, toAttachment } = require('./charts');
+const { MarkovChain } = require('./markov');
 const { MoodSystem, MOODS } = require('./mood');
 const { SermonSystem, TIERS } = require('./sermons');
 const { SoundEffectsEngine, SOUND_TRIGGERS } = require('./sound-effects');
@@ -112,6 +118,14 @@ if (voiceManager) {
   voiceManager.setDreamJournal(dreamJournal);
   voiceManager.setMood(mood);
 }
+
+// --- Register tool modules for AI tool-calling ---
+registerToolModules({ economy, sinDetector, mood, dreamJournal, sermons, achievements });
+
+// --- Fun Features: Webhook Theater, Markov Chain ---
+let theater = null; // Initialized after client is ready (needs client.user)
+const markov = new MarkovChain();
+log.info('Markov chain loaded');
 
 // --- Mood → SFX bridge: play sounds on mood transitions ---
 mood.onTransition = (fromMood, toMood, trigger) => {
@@ -248,6 +262,9 @@ function scheduleNextPreaching() {
 client.once(Events.ClientReady, (c) => {
   log.info({ tag: c.user.tag }, 'Jenkins has awakened');
   c.user.setActivity('over the Lodge', { type: 3 }); // "Watching over the Lodge"
+
+  // Initialize webhook theater (needs client reference)
+  theater = new WebhookTheater(c);
 
   // Auto-detect #jenkins channel if no channel ID is configured
   if (!ANNOUNCEMENT_CHANNEL_ID || ANNOUNCEMENT_CHANNEL_ID === 'your_channel_id_here') {
@@ -806,7 +823,11 @@ client.on(Events.MessageCreate, async (message) => {
         // Achievement check after sermon
         const newAch = achievements.check(message.author.id);
         for (const ach of newAch) {
-          message.channel.send({ embeds: [achievements.unlockEmbed(ach, message.author.displayName || message.author.username)] });
+          const card = generateCardAttachment(ach.name, ach.desc, message.author.displayName || message.author.username);
+          message.channel.send({
+            embeds: [achievements.unlockEmbed(ach, message.author.displayName || message.author.username)],
+            files: [card],
+          });
         }
         break;
       }
@@ -901,7 +922,11 @@ client.on(Events.MessageCreate, async (message) => {
         let reply = result.won
           ? `🎰 **YOU WIN!** +🪙 ${result.amount}\nBalance: 🪙 ${result.balance.toLocaleString()}`
           : `🎰 **YOU LOSE.** -🪙 ${result.amount}\nBalance: 🪙 ${result.balance.toLocaleString()}`;
-        if (newAch.length > 0) reply += `\n\n🏆 **ACHIEVEMENT UNLOCKED:** ${newAch.map(a => a.name).join(', ')}`;
+        if (newAch.length > 0) {
+          reply += `\n\n🏆 **ACHIEVEMENT UNLOCKED:** ${newAch.map(a => a.name).join(', ')}`;
+          const achCards = newAch.map(a => generateCardAttachment(a.name, a.desc, message.author.displayName || message.author.username));
+          return message.reply({ content: reply, files: achCards });
+        }
         return message.reply(reply);
       }
 
@@ -949,6 +974,94 @@ client.on(Events.MessageCreate, async (message) => {
       case 'ach': {
         const target = message.mentions.users.first() || message.author;
         return message.reply({ embeds: [achievements.profileEmbed(target.id, target.displayName || target.username)] });
+      }
+
+      // ── CHARTS — Visual data for the Lodge ──
+      case 'chart':
+      case 'stats': {
+        const sub = args[0]?.toLowerCase();
+        const target = message.mentions.users.first() || message.author;
+
+        try {
+          if (sub === 'leaderboard' || sub === 'lb') {
+            const leaders = economy.leaderboard(10);
+            const chartData = leaders.map(l => {
+              const member = message.guild.members.cache.get(l.userId);
+              return { name: member?.displayName || `#${l.userId.slice(-4)}`, balance: l.balance };
+            });
+            const buf = await leaderboardChart(chartData);
+            return message.reply({ files: [toAttachment(buf, 'leaderboard.png')] });
+          }
+
+          if (sub === 'mood') {
+            const buf = await moodChart(mood.data.axes);
+            return message.reply({ files: [toAttachment(buf, 'mood.png')] });
+          }
+
+          if (sub === 'gamble' || sub === 'gambling') {
+            const user = economy.getUser(target.id);
+            const buf = await winLossChart(target.displayName, user.gamblesWon || 0, user.gamblesLost || 0, 'Gambles');
+            return message.reply({ files: [toAttachment(buf, 'gambles.png')] });
+          }
+
+          // Default: user radar chart
+          const user = economy.getUser(target.id);
+          const buf = await userStatsRadar(target.displayName || target.username, user);
+          return message.reply({ files: [toAttachment(buf, 'stats.png')] });
+        } catch (err) {
+          log.error({ err }, '!chart error');
+          return message.reply('The chart generator encountered an error.');
+        }
+      }
+
+      // ── MARKOV — Jenkins Gibberish Generator ──
+      case 'markov':
+      case 'gibberish': {
+        const seed = args.join(' ').trim() || undefined;
+        const text = markov.generate(seed);
+        return message.reply(`*The Architect speaks in tongues:*\n\n${text}`);
+      }
+
+      // ── KNOWLEDGE BASE — Search Lodge lore and game guides ──
+      case 'lore':
+      case 'kb':
+      case 'wiki': {
+        const query = args.join(' ').trim();
+        if (!query) {
+          const stats = kbStats();
+          return message.reply(`**📚 The Lodge Knowledge Base** — ${stats.total} entries\n\nSearch with \`!lore <query>\`\nExamples: \`!lore kenshi tips\`, \`!lore sin system\`, \`!lore holy trinity\``);
+        }
+        const results = kbSearch(query, 3);
+        if (results.length === 0) {
+          return message.reply(`The archives hold nothing on "${query}". The Architect's knowledge has limits... for now.`);
+        }
+        const text = results.map(r =>
+          `**${r.title}** *(${r.category})*\n${r.content.substring(0, 400)}${r.content.length > 400 ? '...' : ''}`
+        ).join('\n\n');
+        return message.reply(text.substring(0, 1900));
+      }
+
+      // ── COUNCIL MODE — Multi-ego deliberation ──
+      case 'council': {
+        const question = args.join(' ').trim();
+        if (!question) {
+          return message.reply('Summon the Council with a question: `!council <your question>`\nThe Architect\'s alter egos will deliberate and deliver a verdict.');
+        }
+        if (isOnCooldown(userCooldowns, message.author.id, USER_COOLDOWN * 3)) return; // 30s cooldown for council
+
+        try {
+          await message.channel.sendTyping();
+          const { response, members } = await conveneCouncil(
+            deepseek,
+            getActivePrompt(),
+            question,
+            message.author.displayName || message.author.username
+          );
+          return message.reply(response).catch(() => {});
+        } catch (err) {
+          log.error({ err }, '!council error');
+          return message.reply('The Council fragments could not coalesce. The Architect\'s mind is too fractured. Try again.');
+        }
       }
 
       // ── GAME NIGHT COMMANDS ──
@@ -1238,6 +1351,10 @@ client.on(Events.MessageCreate, async (message) => {
   // --- Activity Tracking (for hot takes — Jenkins channel only) ---
   if (message.guild && isJenkinsChannel) {
     activityTracker.recordMessage(message.author.id, message.channel.id);
+    // Feed markov chain from Lodge chat (non-commands only)
+    if (!content.startsWith('!') && content.length > 20) {
+      markov.feed(content);
+    }
   }
 
   // --- Sin Detection: Only in Jenkins channel (don't pollute other channels) ---
@@ -1316,10 +1433,10 @@ client.on(Events.MessageCreate, async (message) => {
       const channelAlter = pickAlterEgoForUser(message.author.id, isRivalInChannel, content);
       const channelPrompt = buildAlterPrompt(getActivePrompt(), channelAlter);
 
-      const response = await chat(
+      const response = await chatWithTools(
         deepseek,
         channelPrompt,
-        `A Brother named ${message.author.displayName || message.author.username} has spoken in your sacred channel: "${content}". Respond naturally as Jenkins. You can be wild, funny, prophetic, or wise. React to what they said. This is YOUR channel — you are free here. Keep it relatively short.`
+        `A Brother named ${message.author.displayName || message.author.username} (userId: ${message.author.id}) has spoken in your sacred channel: "${content}". Respond naturally as Jenkins. You can be wild, funny, prophetic, or wise. React to what they said. This is YOUR channel — you are free here. Keep it relatively short.`
       );
 
       const prefix = (channelAlter.name !== 'Jenkins Prime')
@@ -1340,10 +1457,10 @@ client.on(Events.MessageCreate, async (message) => {
 
       try {
         await message.channel.sendTyping();
-        const response = await chat(
+        const response = await chatWithTools(
           deepseek,
           getActivePrompt(),
-          `A Brother named ${message.author.displayName || message.author.username} has invoked your name in #${message.channel.name}. They said: "${content}". They are calling on you specifically — respond to what they said. Be yourself: funny, wise, dramatic, or helpful depending on what they need. Keep it focused and relevant to their message. 1-3 sentences.`
+          `A Brother named ${message.author.displayName || message.author.username} (userId: ${message.author.id}) has invoked your name in #${message.channel.name}. They said: "${content}". They are calling on you specifically — respond to what they said. Be yourself: funny, wise, dramatic, or helpful depending on what they need. Keep it focused and relevant to their message. 1-3 sentences.`
         );
         return message.reply(response).catch(() => {});
       } catch (err) {
@@ -1373,10 +1490,10 @@ client.on(Events.MessageCreate, async (message) => {
     const directAlter = pickAlterEgoForUser(message.author.id, isRivalDirect, userMessage);
     const directPrompt = buildAlterPrompt(getActivePrompt(), directAlter);
 
-    const response = await chat(
+    const response = await chatWithTools(
       deepseek,
       directPrompt,
-      `A Brother named ${message.author.displayName || message.author.username} speaks to you in the Lodge: "${userMessage || 'They seek your attention without words.'}"`
+      `A Brother named ${message.author.displayName || message.author.username} (userId: ${message.author.id}) speaks to you in the Lodge: "${userMessage || 'They seek your attention without words.'}"`
     );
 
     const prefix = (directAlter.name !== 'Jenkins Prime')

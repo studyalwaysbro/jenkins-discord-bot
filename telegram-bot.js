@@ -6,10 +6,12 @@
 require('dotenv').config();
 
 const { Telegraf } = require('telegraf');
-const { createClient, chat } = require('./deepseek');
+const { createClient, chat, chatWithTools, registerToolModules } = require('./deepseek');
 const { SinDetector } = require('./sins');
 const { ALTER_EGOS, pickAlterEgoForUser, buildAlterPrompt } = require('./alter-egos');
 const { ActivityTracker, generateHotTake, generateStavrosBreak } = require('./hot-takes');
+const { conveneCouncil } = require('./council');
+const { search: kbSearch, getStats: kbStats } = require('./knowledge');
 const {
   SYSTEM_PROMPT,
   CODEX_QUOTES,
@@ -21,6 +23,12 @@ const {
   SESSION_SUMMONS,
   PRIVATE_LORE,
 } = require('./personality');
+const { Economy } = require('./economy');
+const { AchievementSystem, ACHIEVEMENTS } = require('./achievements');
+const { DuelSystem } = require('./duels');
+const { MoodSystem } = require('./mood');
+const { SermonSystem, TIERS } = require('./sermons');
+const { DreamJournal } = require('./dream-journal');
 const log = require('./logger').child('Telegram');
 
 // --- Configuration ---
@@ -47,6 +55,20 @@ const activityTracker = new ActivityTracker();
 // Override hot take chance for Telegram (6% — slightly less than Discord's 8%)
 const TELEGRAM_HOT_TAKE_CHANCE = 0.06;
 log.info('Activity tracker online');
+
+// --- Economy & Gamified Systems ---
+const economy = new Economy();
+const achievements = new AchievementSystem(economy);
+const duels = new DuelSystem(economy);
+const moodSystem = new MoodSystem();
+const sermons = new SermonSystem(deepseek, SYSTEM_PROMPT, economy, moodSystem);
+const dreamJournal = new DreamJournal(deepseek, SYSTEM_PROMPT, {
+  mood: moodSystem, sinDetector, economy,
+});
+log.info('Economy, achievements, duels, mood, sermons, dream journal online');
+
+// --- Register tool modules for AI tool-calling ---
+registerToolModules({ economy, sinDetector, mood: moodSystem, dreamJournal, sermons, achievements });
 
 // --- Cooldown tracking ---
 const userCooldowns = new Map(); // userId -> timestamp
@@ -268,16 +290,35 @@ bot.command('help', async (ctx) => {
   if (!isChatAllowed(ctx)) return;
   await sendMessage(ctx,
     "**The Sacred Commands of Jenkins (Telegram Edition):**\n\n" +
+    "**Lore & Personality:**\n" +
     "`/codex` — Receive wisdom from the Holy Codex\n" +
     "`/trinity` — Learn of the Holy Trinity of games\n" +
     "`/judge <game>` — Jenkins judges a game's worthiness\n" +
     "`/sin <description>` — Confess a sin and receive penance\n" +
     "`/session` — Summon a Sacred Gaming Session\n" +
     "`/rank` — Learn of the Degrees of Initiation\n" +
-    "`/sins` — View your sin record from the Architect's ledger\n" +
-    "`/status` — See who Jenkins favors and who he watches\n" +
+    "`/sins` — View your sin record\n" +
+    "`/status` — See who Jenkins favors and watches\n" +
     "`/hottake` — Summon a hot take from the Architect\n" +
-    "`/ask <question>` — Converse with the Architect directly\n\n" +
+    "`/ask <question>` — Converse with the Architect\n" +
+    "`/mood` — The Architect's current emotional state\n\n" +
+    "**Economy (Torch Coins):**\n" +
+    "`/balance` — Check your Torch Coin balance\n" +
+    "`/daily` — Claim daily coins (streak bonus!)\n" +
+    "`/gamble <amount>` — Coin flip, double or nothing\n" +
+    "`/dungeon <wager>` — Roguelike dungeon run\n" +
+    "`/leaderboard` — Top 10 richest Brothers\n" +
+    "`/give <amount>` — Give coins (reply to a user's message)\n" +
+    "`/duel <amount>` — Challenge someone (reply to their message)\n" +
+    "`/accept` — Accept a duel challenge\n" +
+    "`/decline` — Decline a duel challenge\n\n" +
+    "**Sermons & Dreams:**\n" +
+    "`/sermon <topic> [tier]` — Request a paid AI sermon\n" +
+    "`/dream` — The Architect's last dream\n" +
+    "`/dreams` — Dream archive\n\n" +
+    "**Progress & Special:**\n" +
+    "`/achievements` — Your achievement progress\n" +
+    "`/council <question>` — Summon the Council of Egos\n\n" +
     "*Or simply mention Jenkins by name in any message to get his attention.*",
     ctx.message.message_id
   );
@@ -444,10 +485,10 @@ bot.command('ask', async (ctx) => {
     const alterEgo = pickPersonality(userId, isRival, question);
     const alterPrompt = buildAlterPrompt(SYSTEM_PROMPT, alterEgo);
 
-    const response = await chat(
+    const response = await chatWithTools(
       deepseek,
       alterPrompt,
-      `A Brother named ${getUsername(ctx)} speaks to you in the Lodge: "${question}"`
+      `A Brother named ${getUsername(ctx)} (userId: ${userId}) speaks to you in the Lodge: "${question}"`
     );
 
     const prefix = personalityPrefix(alterEgo, isRival);
@@ -459,6 +500,470 @@ bot.command('ask', async (ctx) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+// ECONOMY, MOOD, DREAMS, SERMONS, DUELS, ACHIEVEMENTS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Format an achievement unlock line for text output.
+ */
+function achUnlockText(newAch) {
+  if (!newAch || newAch.length === 0) return '';
+  return '\n\n🏆 ACHIEVEMENT UNLOCKED: ' + newAch.map(a => `${a.name}`).join(', ');
+}
+
+/**
+ * Resolve a target Telegram user from a reply or fallback to sender.
+ * Returns { id, name } or null if no valid target.
+ */
+function resolveTarget(ctx) {
+  const reply = ctx.message.reply_to_message;
+  if (reply?.from && !reply.from.is_bot) {
+    return {
+      id: String(reply.from.id),
+      name: reply.from.first_name + (reply.from.last_name ? ` ${reply.from.last_name}` : ''),
+    };
+  }
+  return null;
+}
+
+// --- /balance, /bal, /wallet ---
+for (const cmd of ['balance', 'bal', 'wallet']) {
+  bot.command(cmd, async (ctx) => {
+    if (!isChatAllowed(ctx)) return;
+    const target = resolveTarget(ctx);
+    const userId = target ? target.id : getUserId(ctx);
+    const username = target ? target.name : getUsername(ctx);
+    const user = economy.getUser(userId);
+    const bal = user.balance.toLocaleString();
+
+    await sendMessage(ctx,
+      `**🪙 ${username}'s Torch Coin Wallet**\n\n` +
+      `Balance: **${bal}** Torch Coins\n` +
+      `Total Earned: ${(user.totalEarned || 0).toLocaleString()}\n` +
+      `Total Lost: ${(user.totalLost || 0).toLocaleString()}\n` +
+      `Daily Streak: 🔥 ${user.dailyStreak || 0} days\n` +
+      `Gambles: ${user.gamblesWon || 0}W / ${user.gamblesLost || 0}L\n` +
+      `Dungeons: ${user.dungeonWins || 0}W / ${(user.dungeonRuns || 0) - (user.dungeonWins || 0)}L`,
+      ctx.message.message_id
+    );
+  });
+}
+
+// --- /daily ---
+bot.command('daily', async (ctx) => {
+  if (!isChatAllowed(ctx)) return;
+  const result = economy.daily(getUserId(ctx));
+  if (!result.success) {
+    return sendMessage(ctx, `⏰ ${result.message}`, ctx.message.message_id);
+  }
+
+  let text = `**🪙 Daily Torch Coins Claimed!**\n\n` +
+    `**+${result.amount}** Torch Coins\n` +
+    `(Base: ${result.base} + Streak Bonus: ${result.streakBonus})\n` +
+    `Streak: 🔥 ${result.streak} days\n` +
+    `Balance: 🪙 ${result.balance.toLocaleString()}`;
+
+  const newAch = achievements.check(getUserId(ctx));
+  text += achUnlockText(newAch);
+  await sendMessage(ctx, text, ctx.message.message_id);
+});
+
+// --- /gamble <amount> ---
+bot.command('gamble', async (ctx) => {
+  if (!isChatAllowed(ctx)) return;
+  const args = ctx.message.text.split(/\s+/).slice(1);
+  const amt = parseInt(args[0]);
+  if (!amt || amt <= 0) {
+    return sendMessage(ctx, 'Usage: `/gamble <amount>` — Flip a coin, double or nothing.', ctx.message.message_id);
+  }
+
+  const result = economy.gamble(getUserId(ctx), amt);
+  if (!result.success) return sendMessage(ctx, result.message, ctx.message.message_id);
+
+  moodSystem.onGambleResult(result.won, result.amount);
+  const newAch = achievements.check(getUserId(ctx));
+
+  let text = result.won
+    ? `🎰 **YOU WIN!** +🪙 ${result.amount}\nBalance: 🪙 ${result.balance.toLocaleString()}`
+    : `🎰 **YOU LOSE.** -🪙 ${result.amount}\nBalance: 🪙 ${result.balance.toLocaleString()}`;
+  text += achUnlockText(newAch);
+  await sendMessage(ctx, text, ctx.message.message_id);
+});
+
+// --- /dungeon <wager> ---
+bot.command('dungeon', async (ctx) => {
+  if (!isChatAllowed(ctx)) return;
+  const args = ctx.message.text.split(/\s+/).slice(1);
+  const wager = parseInt(args[0]);
+  if (!wager || wager <= 0) {
+    return sendMessage(ctx, 'Usage: `/dungeon <wager>` — Risk coins in a roguelike dungeon run.', ctx.message.message_id);
+  }
+
+  const result = economy.dungeon(getUserId(ctx), wager);
+  if (!result.success) return sendMessage(ctx, result.message, ctx.message.message_id);
+
+  const newAch = achievements.check(getUserId(ctx));
+
+  let text;
+  if (result.survived) {
+    text = `**⚔️ Dungeon: ${result.room}**\n\n` +
+      `${result.flavor}\n\n` +
+      `✅ SURVIVED\n` +
+      `Wager: 🪙 ${result.wager} × ${result.multi} = **+🪙 ${result.reward}**\n` +
+      `Balance: 🪙 ${result.balance.toLocaleString()}`;
+  } else {
+    text = `**⚔️ Dungeon: ${result.room}**\n\n` +
+      `${result.flavor}\n\n` +
+      `💀 DEFEATED\n` +
+      `Lost: 🪙 ${result.wager}\n` +
+      `Balance: 🪙 ${result.balance.toLocaleString()}`;
+  }
+  text += achUnlockText(newAch);
+  await sendMessage(ctx, text, ctx.message.message_id);
+});
+
+// --- /leaderboard, /lb, /top ---
+for (const cmd of ['leaderboard', 'lb', 'top']) {
+  bot.command(cmd, async (ctx) => {
+    if (!isChatAllowed(ctx)) return;
+    const leaders = economy.leaderboard(10);
+    if (!leaders || leaders.length === 0) {
+      return sendMessage(ctx, 'The Torch Economy has no entries yet. Claim `/daily` to begin.', ctx.message.message_id);
+    }
+
+    const medals = ['🥇', '🥈', '🥉'];
+    const lines = leaders.map((entry, i) => {
+      const medal = medals[i] || `${i + 1}.`;
+      const name = entry.username || `Brother #${entry.userId.slice(-4)}`;
+      return `${medal} **${name}** — 🪙 ${entry.balance.toLocaleString()}`;
+    });
+
+    await sendMessage(ctx,
+      `**🏆 Torch Coin Leaderboard — Top ${leaders.length}**\n\n${lines.join('\n')}`,
+      ctx.message.message_id
+    );
+  });
+}
+
+// --- /give <amount> (reply to target user's message) ---
+bot.command('give', async (ctx) => {
+  if (!isChatAllowed(ctx)) return;
+  const args = ctx.message.text.split(/\s+/).slice(1);
+  const amt = parseInt(args[0]);
+  const target = resolveTarget(ctx);
+
+  if (!target || !amt || amt <= 0) {
+    return sendMessage(ctx, 'Usage: Reply to a user\'s message with `/give <amount>` to send them Torch Coins.', ctx.message.message_id);
+  }
+  if (target.id === getUserId(ctx)) {
+    return sendMessage(ctx, "You can't give coins to yourself. Nice try.", ctx.message.message_id);
+  }
+
+  const result = economy.give(getUserId(ctx), target.id, amt);
+  if (!result.success) return sendMessage(ctx, result.message, ctx.message.message_id);
+
+  const u = economy.getUser(getUserId(ctx));
+  if (!u.totalGiven) u.totalGiven = 0;
+  u.totalGiven += amt;
+
+  await sendMessage(ctx,
+    `🪙 Sent **${amt}** Torch Coins to ${target.name}!\nYour balance: 🪙 ${result.fromBalance.toLocaleString()}`,
+    ctx.message.message_id
+  );
+});
+
+// --- /mood ---
+bot.command('mood', async (ctx) => {
+  if (!isChatAllowed(ctx)) return;
+  const currentMood = moodSystem.deriveMood();
+  const axes = moodSystem.data?.axes || moodSystem.axes || {};
+  const transitions = moodSystem.data?.transitions || [];
+
+  // Build axis bars
+  function axisBar(val) {
+    const filled = Math.round((val || 0) / 10);
+    return '█'.repeat(filled) + '░'.repeat(10 - filled) + ` ${val || 0}`;
+  }
+
+  let text = `**🧠 The Architect's Mind — Current Mood: ${currentMood.toUpperCase()}**\n\n` +
+    `Wrath: ${axisBar(axes.wrath)}\n` +
+    `Joy: ${axisBar(axes.joy)}\n` +
+    `Energy: ${axisBar(axes.energy)}\n` +
+    `Chaos: ${axisBar(axes.chaos)}\n\n` +
+    `Economy Multiplier: **×${moodSystem.getEconomyMultiplier()}**\n` +
+    `Sin Sensitivity: **×${moodSystem.getSinSensitivity()}**`;
+
+  if (transitions.length > 0) {
+    const last = transitions[transitions.length - 1];
+    text += `\n\nLast transition: ${last.from || '?'} → ${last.to || '?'}`;
+  }
+
+  await sendMessage(ctx, text, ctx.message.message_id);
+});
+
+// --- /dream ---
+bot.command('dream', async (ctx) => {
+  if (!isChatAllowed(ctx)) return;
+  const args = ctx.message.text.split(/\s+/).slice(1);
+  const sub = args[0]?.toLowerCase();
+
+  if (sub === 'journal' || sub === 'log' || sub === 'archive') {
+    return handleDreamList(ctx);
+  }
+
+  const dreams = dreamJournal.data?.dreams || [];
+  const last = dreams[dreams.length - 1];
+  if (!last) {
+    return sendMessage(ctx, 'The Architect has not yet dreamed. The void is silent.', ctx.message.message_id);
+  }
+
+  const date = last.date || new Date(last.timestamp).toLocaleDateString();
+  await sendMessage(ctx,
+    `**🌙 The Architect's Dream — ${date}**\n` +
+    `Mood: ${last.mood || 'unknown'}\n\n` +
+    `${last.content}`,
+    ctx.message.message_id
+  );
+});
+
+// --- /dreams ---
+async function handleDreamList(ctx) {
+  const dreams = dreamJournal.data?.dreams || [];
+  if (dreams.length === 0) {
+    return sendMessage(ctx, 'The dream journal is empty. The Architect sleeps without visions.', ctx.message.message_id);
+  }
+
+  const recent = dreams.slice(-10).reverse();
+  const lines = recent.map((d, i) => {
+    const date = d.date || new Date(d.timestamp).toLocaleDateString();
+    const preview = (d.content || '').substring(0, 80).replace(/\n/g, ' ');
+    return `**${d.id || i + 1}.** ${date} (${d.mood || '?'}) — ${preview}...`;
+  });
+
+  await sendMessage(ctx,
+    `**🌙 Dream Archive — Last ${recent.length} Dreams**\n\n${lines.join('\n')}`,
+    ctx.message.message_id
+  );
+}
+
+bot.command('dreams', async (ctx) => {
+  if (!isChatAllowed(ctx)) return;
+  await handleDreamList(ctx);
+});
+
+// --- /sermon <topic> [tier] ---
+bot.command('sermon', async (ctx) => {
+  if (!isChatAllowed(ctx)) return;
+  const fullArgs = ctx.message.text.replace(/^\/sermon\s*/i, '').trim();
+
+  // Sub-commands
+  const sub = fullArgs.toLowerCase();
+  if (sub === 'hall' || sub === 'list' || sub === 'history') {
+    const history = sermons.data?.sermons || [];
+    if (history.length === 0) {
+      return sendMessage(ctx, 'The Sermon Hall is empty. No sacred words have been spoken.', ctx.message.message_id);
+    }
+    const recent = history.slice(-10).reverse();
+    const lines = recent.map(s => {
+      const date = new Date(s.timestamp).toLocaleDateString();
+      return `**${s.id}** — "${s.topic}" (${s.tier}) by ${s.username} [${date}]`;
+    });
+    return sendMessage(ctx,
+      `**⛪ Sermon Hall — Recent Sermons**\n\n${lines.join('\n')}`,
+      ctx.message.message_id
+    );
+  }
+
+  // Parse: /sermon <topic> [whisper|homily|sermon|prophecy]
+  const tierMatch = fullArgs.match(/\b(whisper|homily|sermon|prophecy)\b/i);
+  const tierName = tierMatch ? tierMatch[1].toLowerCase() : 'homily';
+  const topic = fullArgs.replace(/\b(whisper|homily|sermon|prophecy)\b/i, '').trim();
+
+  if (!topic) {
+    const tierList = Object.entries(TIERS).map(([k, v]) => `${v.emoji} ${k}: 🪙 ${v.cost}`).join('\n');
+    return sendMessage(ctx,
+      `What shall the Architect preach upon?\n\`/sermon <topic> [tier]\`\n\nTiers:\n${tierList}\n\nDefault: homily (🪙 500)`,
+      ctx.message.message_id
+    );
+  }
+
+  if (isOnCooldown(userCooldowns, getUserId(ctx), USER_COOLDOWN)) return;
+
+  try {
+    await ctx.sendChatAction('typing');
+    const result = await sermons.request(
+      getUserId(ctx),
+      getUsername(ctx),
+      topic, tierName
+    );
+    if (!result.success) return sendMessage(ctx, result.message, ctx.message.message_id);
+
+    const tier = result.tier || TIERS[tierName];
+    await sendMessage(ctx,
+      `**${tier.emoji} ${tierName.toUpperCase()} — "${topic}"**\n` +
+      `Requested by ${getUsername(ctx)} | Cost: 🪙 ${tier.cost}\n\n` +
+      `${result.sermon}`,
+      ctx.message.message_id
+    );
+
+    // Track for dreams
+    dreamJournal.trackSermonTopic(topic);
+    moodSystem.onSermonRequested();
+
+    // Achievement check
+    const newAch = achievements.check(getUserId(ctx));
+    if (newAch.length > 0) {
+      await sendMessage(ctx, `🏆 **ACHIEVEMENT UNLOCKED:** ${newAch.map(a => a.name).join(', ')}`, ctx.message.message_id);
+    }
+  } catch (err) {
+    log.error({ err }, '/sermon error');
+    await sendMessage(ctx, "The Architect's voice falters mid-sermon. Try again, Brother.", ctx.message.message_id);
+  }
+});
+
+// --- /lore, /kb, /wiki ---
+for (const cmd of ['lore', 'kb', 'wiki']) {
+  bot.command(cmd, async (ctx) => {
+    if (!isChatAllowed(ctx)) return;
+    const query = ctx.message.text.replace(new RegExp(`^/${cmd}\\s*`, 'i'), '').trim();
+    if (!query) {
+      const stats = kbStats();
+      return sendMessage(ctx,
+        `**📚 The Lodge Knowledge Base** — ${stats.total} entries\n\nSearch with \`/lore <query>\`\nExamples: \`/lore kenshi tips\`, \`/lore sin system\`, \`/lore holy trinity\``,
+        ctx.message.message_id
+      );
+    }
+    const results = kbSearch(query, 3);
+    if (results.length === 0) {
+      return sendMessage(ctx, `The archives hold nothing on "${query}". The Architect's knowledge has limits... for now.`, ctx.message.message_id);
+    }
+    const text = results.map(r =>
+      `**${r.title}** *(${r.category})*\n${r.content.substring(0, 400)}${r.content.length > 400 ? '...' : ''}`
+    ).join('\n\n');
+    await sendMessage(ctx, text, ctx.message.message_id);
+  });
+}
+
+// --- /council <question> ---
+bot.command('council', async (ctx) => {
+  if (!isChatAllowed(ctx)) return;
+  const question = ctx.message.text.replace(/^\/council\s*/i, '').trim();
+  if (!question) {
+    return sendMessage(ctx,
+      'Summon the Council with a question:\n`/council <your question>`\nThe Architect\'s alter egos will deliberate and deliver a verdict.',
+      ctx.message.message_id
+    );
+  }
+  if (isOnCooldown(userCooldowns, getUserId(ctx), USER_COOLDOWN * 3)) return;
+
+  try {
+    await ctx.sendChatAction('typing');
+    const { response } = await conveneCouncil(
+      deepseek,
+      SYSTEM_PROMPT,
+      question,
+      getUsername(ctx)
+    );
+    await sendMessage(ctx, response, ctx.message.message_id);
+  } catch (err) {
+    log.error({ err }, '/council error');
+    await sendMessage(ctx, "The Council fragments could not coalesce. Try again, Brother.", ctx.message.message_id);
+  }
+});
+
+// --- /duel <amount> (reply to target user's message) ---
+bot.command('duel', async (ctx) => {
+  if (!isChatAllowed(ctx)) return;
+  const args = ctx.message.text.split(/\s+/).slice(1);
+  const amt = parseInt(args[0]);
+  const target = resolveTarget(ctx);
+
+  if (!target || !amt || amt <= 0) {
+    return sendMessage(ctx, 'Usage: Reply to a user\'s message with `/duel <amount>` to challenge them.', ctx.message.message_id);
+  }
+  if (target.id === getUserId(ctx)) {
+    return sendMessage(ctx, "You can't duel yourself. That's just shadow boxing.", ctx.message.message_id);
+  }
+
+  const result = duels.challenge(getUserId(ctx), target.id, amt, String(ctx.chat.id));
+  if (!result.success) return sendMessage(ctx, result.message, ctx.message.message_id);
+
+  moodSystem.onDuel();
+
+  await sendMessage(ctx,
+    `⚔️ **DUEL CHALLENGE!** ${getUsername(ctx)} challenges ${target.name} for 🪙 **${amt.toLocaleString()}** Torch Coins!\n\n` +
+    `${target.name}, type /accept to fight or /decline to flee. (60s to respond)`,
+    ctx.message.message_id
+  );
+});
+
+// --- /accept ---
+bot.command('accept', async (ctx) => {
+  if (!isChatAllowed(ctx)) return;
+  const result = duels.accept(getUserId(ctx));
+  if (!result.success) return sendMessage(ctx, result.message, ctx.message.message_id);
+
+  const winnerName = result.winnerId === getUserId(ctx) ? getUsername(ctx) : 'The challenger';
+  const loserName = result.winnerId === getUserId(ctx) ? 'The challenger' : getUsername(ctx);
+
+  let text = `⚔️ **DUEL RESOLVED!**\n\n` +
+    `🏆 **${winnerName} WINS!**\n` +
+    `💀 ${loserName} falls.\n\n` +
+    `Pot: 🪙 ${result.amount.toLocaleString()}\n` +
+    `Winner balance: 🪙 ${result.winnerBalance.toLocaleString()}\n` +
+    `Loser balance: 🪙 ${result.loserBalance.toLocaleString()}`;
+
+  // Achievement check for both duelists
+  const winAch = achievements.check(result.winnerId);
+  const loseAch = achievements.check(result.loserId);
+  const allAch = [...winAch, ...loseAch];
+  text += achUnlockText(allAch);
+
+  dreamJournal.trackDuel();
+  await sendMessage(ctx, text, ctx.message.message_id);
+});
+
+// --- /decline ---
+bot.command('decline', async (ctx) => {
+  if (!isChatAllowed(ctx)) return;
+  const result = duels.decline(getUserId(ctx));
+  if (!result.success) return sendMessage(ctx, result.message, ctx.message.message_id);
+
+  await sendMessage(ctx,
+    `${getUsername(ctx)} declined the duel. *Cowardice or wisdom? The Architect notes both.*`,
+    ctx.message.message_id
+  );
+});
+
+// --- /achievements, /ach ---
+for (const cmd of ['achievements', 'ach']) {
+  bot.command(cmd, async (ctx) => {
+    if (!isChatAllowed(ctx)) return;
+    const target = resolveTarget(ctx);
+    const userId = target ? target.id : getUserId(ctx);
+    const username = target ? target.name : getUsername(ctx);
+    const user = economy.getUser(userId);
+    const unlocked = user.achievements || [];
+
+    const allAch = ACHIEVEMENTS || [];
+
+    const unlockedIds = new Set(unlocked.map(a => a.id || a));
+    const earned = allAch.filter(a => unlockedIds.has(a.id));
+    const locked = allAch.filter(a => !unlockedIds.has(a.id));
+
+    const earnedLines = earned.map(a => `✅ **${a.name}** — ${a.desc}`);
+    const nextUp = locked.slice(0, 5).map(a => `🔒 ${a.name} — ${a.desc}`);
+
+    let text = `**🏆 ${username}'s Achievements (${earned.length}/${allAch.length})**\n\n`;
+    if (earnedLines.length > 0) text += earnedLines.join('\n') + '\n\n';
+    if (nextUp.length > 0) text += `**Next to unlock:**\n${nextUp.join('\n')}`;
+    if (earned.length === 0 && nextUp.length === 0) text += 'No achievements yet. Start with /daily!';
+
+    await sendMessage(ctx, text, ctx.message.message_id);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
 // MESSAGE HANDLER — Full personality integration
 // Sin detection on ALL messages, hot takes, Stavros breaks,
 // React Lord triggers, ambient responses, mention detection
@@ -467,11 +972,46 @@ bot.command('ask', async (ctx) => {
 bot.on('text', async (ctx) => {
   if (!isChatAllowed(ctx)) return;
   const text = ctx.message.text?.trim();
-  if (!text || text.startsWith('/')) return; // Skip commands
+  if (!text || text.startsWith('/')) return; // Skip slash commands
+
+  // --- !command support (Discord-style bang commands) ---
+  const bangMatch = text.match(/^!(\w+)\s*(.*)?$/);
+  if (bangMatch) {
+    const bangCmd = bangMatch[1].toLowerCase();
+    const bangArgs = (bangMatch[2] || '').trim();
+
+    // Map bang commands to the same logic as slash commands
+    const BANG_ALIASES = {
+      // Economy
+      balance: 'balance', bal: 'balance', wallet: 'balance',
+      daily: 'daily', gamble: 'gamble', dungeon: 'dungeon',
+      leaderboard: 'leaderboard', lb: 'leaderboard', top: 'leaderboard',
+      give: 'give', mood: 'mood', dream: 'dream', dreams: 'dreams',
+      sermon: 'sermon', duel: 'duel', accept: 'accept', decline: 'decline',
+      achievements: 'achievements', ach: 'achievements',
+      council: 'council', lore: 'lore', kb: 'lore', wiki: 'lore',
+      // Existing commands
+      codex: 'codex', trinity: 'trinity', judge: 'judge', sin: 'sin',
+      session: 'session', rank: 'rank', sins: 'sins', status: 'status',
+      hottake: 'hottake', ask: 'ask', help: 'help',
+    };
+
+    if (BANG_ALIASES[bangCmd]) {
+      // Rewrite the message text as a slash command and re-emit
+      ctx.message.text = `/${BANG_ALIASES[bangCmd]} ${bangArgs}`.trim();
+      return bot.handleUpdate({
+        update_id: ctx.update.update_id,
+        message: ctx.message,
+      });
+    }
+  }
 
   const userId = getUserId(ctx);
   const username = getUsername(ctx);
   const chatId = String(ctx.chat.id);
+
+  // --- Chat coin earning (passive economy engagement) ---
+  economy.onMessage(userId);
 
   log.debug({ username, preview: text.substring(0, 80), chatId }, 'Message received');
 
@@ -590,10 +1130,10 @@ bot.on('text', async (ctx) => {
       const alterEgo = pickPersonality(userId, isRival, cleanMessage);
       const alterPrompt = buildAlterPrompt(SYSTEM_PROMPT, alterEgo);
 
-      const response = await chat(
+      const response = await chatWithTools(
         deepseek,
         alterPrompt,
-        `A Brother named ${username} speaks to you in the Lodge: "${cleanMessage || 'They seek your attention without words.'}"`
+        `A Brother named ${username} (userId: ${userId}) speaks to you in the Lodge: "${cleanMessage || 'They seek your attention without words.'}"`
       );
 
       const prefix = personalityPrefix(alterEgo, isRival);

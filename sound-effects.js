@@ -8,11 +8,11 @@ const path = require('path');
 const https = require('https');
 const { Readable } = require('stream');
 const { createAudioResource, StreamType, AudioPlayerStatus } = require('@discordjs/voice');
-const { safeReadJSON, safeWriteJSON, PrunedMap } = require('./safe-write');
+const { PrunedMap } = require('./safe-write');
+const { dbRead, dbWrite } = require('./db');
 const log = require('./logger').child('SFX');
 
 const CACHE_DIR = path.join(__dirname, 'data', 'sfx-cache');
-const DATA_FILE = path.join(__dirname, 'data', 'sound-effects.json');
 
 // ═══════════════════════════════════════════════════════════════
 // Sound Definitions — event triggers mapped to sound prompts
@@ -69,7 +69,7 @@ class SoundEffectsEngine {
     this.apiKey = elevenlabsApiKey;
     this.cache = new Map();          // triggerName -> Buffer
     this.cooldowns = new PrunedMap(3600000, 600000);
-    this.data = safeReadJSON(DATA_FILE, () => ({ playCount: {}, totalPlays: 0, lastPrewarm: null }));
+    this.data = dbRead('sound_effects', { playCount: {}, totalPlays: 0, lastPrewarm: null });
     this.enabled = !!elevenlabsApiKey;
     this.prewarming = false;
 
@@ -85,7 +85,7 @@ class SoundEffectsEngine {
     log.info({ cacheSize: this.cache.size, enabled: this.enabled }, 'SFX engine loaded');
   }
 
-  save() { safeWriteJSON(DATA_FILE, this.data); }
+  save() { dbWrite('sound_effects', this.data); }
 
   // ═══════════════════════════════════════════════════════════════
   // Disk Cache

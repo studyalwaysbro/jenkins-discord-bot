@@ -3,12 +3,10 @@
 // Multi-axis mood system: wrath, joy, energy, chaos → derived mood state
 // Mood colors every DeepSeek response and mechanically affects other systems
 
-const path = require('path');
 const { EmbedBuilder } = require('discord.js');
-const { safeWriteJSON, safeReadJSON, PrunedMap } = require('./safe-write');
+const { PrunedMap } = require('./safe-write');
+const { dbRead, dbWrite } = require('./db');
 const log = require('./logger').child('Mood');
-
-const DATA_FILE = path.join(__dirname, 'data', 'mood.json');
 const DECAY_INTERVAL = 15 * 60 * 1000; // 15 minutes
 const SAVE_INTERVAL = 5 * 60 * 1000;   // 5 minutes
 const MOOD_LOG_MAX = 50;
@@ -45,7 +43,7 @@ const MOOD_OVERLAYS = {
 
 class MoodSystem {
   constructor() {
-    this.data = safeReadJSON(DATA_FILE, () => this.defaultState());
+    this.data = dbRead('mood', null) || this.defaultState();
     this.lastMood = this.deriveMood();
     this.lastShiftTime = this.data.lastShift || 0;
     this.onTransition = null; // callback: (fromMood, toMood, trigger) => {}
@@ -66,7 +64,7 @@ class MoodSystem {
     };
   }
 
-  save() { safeWriteJSON(DATA_FILE, this.data); }
+  save() { dbWrite('mood', this.data); }
 
   // ═══════════════════════════════════════════════════════════════
   // Axis Manipulation

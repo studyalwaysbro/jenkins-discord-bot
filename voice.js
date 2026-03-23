@@ -17,6 +17,7 @@ const { chat, chatStream } = require('./deepseek');
 const { PipelineTimer, SessionStats } = require('./latency-monitor');
 const prism = require('prism-media');
 const path = require('path');
+const { SileroVAD } = require('./silero-vad');
 const log = require('./logger').child('Voice');
 
 // Point to the bundled ffmpeg binary
@@ -182,8 +183,24 @@ function classifyAudioType(pcmBuffer) {
   return { type: 'uncertain', confidence: 0.3, details };
 }
 
+// --- Silero VAD (ML-based, loaded async at startup) ---
+const sileroVAD = new SileroVAD();
+let sileroReady = false;
+
+// Initialize Silero on module load — falls back to DSP if it fails
+sileroVAD.init().then(() => {
+  sileroReady = true;
+  log.info('Silero VAD ready — ML-based speech detection active');
+}).catch((err) => {
+  log.warn({ err }, 'Silero VAD failed to load — using DSP fallback');
+});
+
 let lastClassification = null;
-function isLikelySpeech(pcmBuffer) {
+
+/**
+ * DSP-based speech detection (legacy fallback).
+ */
+function isLikelySpeechDSP(pcmBuffer) {
   lastClassification = classifyAudioType(pcmBuffer);
   if (lastClassification.type === 'speech') return true;
   if (lastClassification.type === 'uncertain') {
@@ -195,6 +212,34 @@ function isLikelySpeech(pcmBuffer) {
     }
   }
   return false;
+}
+
+/**
+ * ML-based speech detection using Silero VAD, with DSP fallback.
+ * Returns { isSpeech, type, confidence, details }.
+ */
+async function isLikelySpeech(pcmBuffer) {
+  // Run DSP classification in parallel (cheap, useful for noise type logging)
+  const dspResult = classifyAudioType(pcmBuffer);
+  lastClassification = dspResult;
+
+  if (sileroReady) {
+    try {
+      const result = await sileroVAD.analyze(pcmBuffer);
+      // Override classification type based on Silero
+      lastClassification = {
+        type: result.isSpeech ? 'speech' : dspResult.type,
+        confidence: result.confidence,
+        details: `[silero] ${result.details} | [dsp] ${dspResult.details}`,
+      };
+      return result.isSpeech;
+    } catch (err) {
+      log.warn({ err }, 'Silero inference error, falling back to DSP');
+    }
+  }
+
+  // DSP fallback
+  return isLikelySpeechDSP(pcmBuffer);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -622,9 +667,9 @@ class VoiceManager {
     }
     timer.end(`${durationSec.toFixed(1)}s audio`);
 
-    // ── Filter 2: Advanced noise classification ──
+    // ── Filter 2: Silero VAD (ML) + DSP noise classification ──
     timer.start('VAD/Filter');
-    if (!isLikelySpeech(pcmBuffer)) {
+    if (!(await isLikelySpeech(pcmBuffer))) {
       const noiseType = lastClassification?.type || 'unknown';
       timer.end(`rejected: ${noiseType}`);
       timer.set('filtered', noiseType);

@@ -3,12 +3,9 @@
 //  "The Architect immortalizes only the worthy."
 // ═══════════════════════════════════════════════════════════════
 
-const path = require('path');
 const { EmbedBuilder } = require('discord.js');
 const log = require('./logger').child('Starboard');
-const { safeWriteJSON, safeReadJSON } = require('./safe-write');
-
-const DATA_FILE = path.join(__dirname, 'data', 'starboard.json');
+const { dbRead, dbWrite } = require('./db');
 const STAR_EMOJI = '⭐';
 const STAR_THRESHOLD = 3;        // Reactions needed to get starred
 const STARBOARD_CHANNEL = 'hall-of-fame';
@@ -21,11 +18,11 @@ class Starboard {
   }
 
   load() {
-    return safeReadJSON(DATA_FILE, { starred: {} });
+    return dbRead('starboard', { starred: {} });
   }
 
   save() {
-    safeWriteJSON(DATA_FILE, this.data);
+    dbWrite('starboard', this.data);
   }
 
   async handleReaction(reaction, user) {

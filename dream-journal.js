@@ -3,13 +3,10 @@
 // Jenkins dreams at 3 AM. Dreams are surreal AI-generated narratives
 // built from real server events: sins, economy, voice, mood, sermons.
 
-const path = require('path');
 const { EmbedBuilder } = require('discord.js');
 const { chat } = require('./deepseek');
-const { safeWriteJSON, safeReadJSON } = require('./safe-write');
+const { dbRead, dbWrite } = require('./db');
 const log = require('./logger').child('Dreams');
-
-const DATA_FILE = path.join(__dirname, 'data', 'dreams.json');
 const SAVE_INTERVAL = 5 * 60 * 1000;
 const DREAM_HOUR = 3;         // 3 AM local time
 const MAX_DREAMS = 50;
@@ -32,13 +29,13 @@ class DreamJournal {
     // Volatile day counters — reset after each dream
     this.dayCounters = this.freshCounters();
 
-    this.data = safeReadJSON(DATA_FILE, () => ({ dreams: [], idCounter: 0, lastDreamDate: null }));
+    this.data = dbRead('dreams', { dreams: [], idCounter: 0, lastDreamDate: null });
 
     setInterval(() => this.save(), SAVE_INTERVAL);
     log.info({ dreamCount: this.data.dreams.length }, 'Dream journal initialized');
   }
 
-  save() { safeWriteJSON(DATA_FILE, this.data); }
+  save() { dbWrite('dreams', this.data); }
 
   freshCounters() {
     return {

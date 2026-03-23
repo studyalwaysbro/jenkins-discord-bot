@@ -3,12 +3,9 @@
 //  "Court is in recess. Game night is in session."
 // ═══════════════════════════════════════════════════════════════
 
-const path = require('path');
 const { EmbedBuilder } = require('discord.js');
 const log = require('./logger').child('GameNight');
-const { safeWriteJSON, safeReadJSON } = require('./safe-write');
-
-const DATA_FILE = path.join(__dirname, 'data', 'game-nights.json');
+const { dbRead, dbWrite } = require('./db');
 
 // Nick's game library (co-op and competitive)
 const GAME_LIBRARY = [
@@ -279,11 +276,11 @@ class GameNight {
   }
 
   load() {
-    return safeReadJSON(DATA_FILE, { upcoming: [], history: [], idCounter: 0 });
+    return dbRead('game_nights', { upcoming: [], history: [], idCounter: 0 });
   }
 
   save() {
-    safeWriteJSON(DATA_FILE, this.data);
+    dbWrite('game_nights', this.data);
   }
 
   // Single-game event

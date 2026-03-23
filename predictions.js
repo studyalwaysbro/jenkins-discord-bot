@@ -3,12 +3,9 @@
 //  "The Architect sees all futures. Can you?"
 // ═══════════════════════════════════════════════════════════════
 
-const path = require('path');
 const { EmbedBuilder } = require('discord.js');
 const log = require('./logger').child('Predictions');
-const { safeWriteJSON, safeReadJSON } = require('./safe-write');
-
-const DATA_FILE = path.join(__dirname, 'data', 'predictions.json');
+const { dbRead, dbWrite } = require('./db');
 const MIN_BET = 50;
 const MAX_BET = 10000;
 
@@ -19,11 +16,11 @@ class PredictionMarket {
   }
 
   load() {
-    return safeReadJSON(DATA_FILE, { markets: [], idCounter: 0, history: [] });
+    return dbRead('predictions', { markets: [], idCounter: 0, history: [] });
   }
 
   save() {
-    safeWriteJSON(DATA_FILE, this.data);
+    dbWrite('predictions', this.data);
   }
 
   // Create a new prediction market
