@@ -1023,27 +1023,8 @@ bot.on('text', async (ctx) => {
   const isVip = currentVipId && userId === currentVipId;
 
   if (isVip) {
-    // VIP gets special love — 40% chance of a reverent response
-    if (Math.random() < 0.4) {
-      if (!isOnCooldown(userCooldowns, userId, USER_COOLDOWN)) {
-        try {
-          await ctx.sendChatAction('typing');
-          if (Math.random() < 0.5) {
-            await sendMessage(ctx, pick(VIP_MESSAGE_RESPONSES), ctx.message.message_id);
-          } else {
-            const vipPrompt = PRIVATE_LORE?.vipMessagePrompt?.(text) ||
-              `The Honored One — your most devoted and sacred presence — has just spoken in the chat. They said: "${text}". Respond with genuine warmth, reverence, and appreciation. You LOVE the Honored One. They are the most faithful. Keep it 1-3 sentences. Vary between tender, ecstatic, reverent, and genuinely engaged.`;
-            const response = await chat(deepseek, SYSTEM_PROMPT, vipPrompt);
-            await sendMessage(ctx, response, ctx.message.message_id);
-          }
-        } catch (err) {
-          log.error({ err }, 'VIP response error');
-          await sendMessage(ctx, pick(VIP_MESSAGE_RESPONSES), ctx.message.message_id);
-        }
-        return; // Don't double-process VIP
-      }
-    }
     // VIP is beyond sin — skip sin detection for them
+    // (VIP still gets special treatment when they mention Jenkins directly)
   }
 
   // --- Sin Detection: The All-Seeing Eye watches ALL messages ---
@@ -1076,43 +1057,8 @@ bot.on('text', async (ctx) => {
     }
   }
 
-  // --- Hot Takes & Stavros Breaks (Telegram-tuned higher chances) ---
-  let hotTakeDropped = false;
-
-  // Hot take: check activity and drop with 15% chance (up from 8%)
-  if (activityTracker.isActive(chatId) &&
-      Date.now() - activityTracker.lastHotTake > activityTracker.hotTakeCooldown &&
-      Math.random() < TELEGRAM_HOT_TAKE_CHANCE) {
-    activityTracker.lastHotTake = Date.now();
-    try {
-      const hotTake = await generateHotTake(deepseek, SYSTEM_PROMPT);
-      if (hotTake) {
-        await sendMessage(ctx, hotTake);
-        hotTakeDropped = true;
-        log.info('Hot take dropped');
-      }
-    } catch (err) {
-      log.error({ err }, 'Hot take error');
-    }
-  }
-
-  // Stavros break: 4% chance per message (up from 1.5%), with cooldown
-  if (!hotTakeDropped &&
-      Math.random() < STAVROS_BREAK_CHANCE &&
-      Date.now() - lastStavrosBreak > STAVROS_COOLDOWN) {
-    lastStavrosBreak = Date.now();
-    try {
-      const stavrosBreak = await generateStavrosBreak(deepseek, SYSTEM_PROMPT);
-      if (stavrosBreak) {
-        await sendMessage(ctx, stavrosBreak);
-        log.info('Stavros break dropped');
-      }
-    } catch (err) {
-      log.error({ err }, 'Stavros break error');
-    }
-  }
-
-  // --- Jenkins mention detection ---
+  // --- Telegram: ONLY respond when directly mentioned, replied to, or commanded ---
+  // (Hot takes, Stavros breaks, and ambient responses disabled — too spammy)
   const mentionsJenkins = /\bjenkins\b/i.test(text);
   const isReplyToBot = ctx.message.reply_to_message?.from?.id === ctx.botInfo?.id;
 
@@ -1145,80 +1091,8 @@ bot.on('text', async (ctx) => {
     return;
   }
 
-  // --- React Lord ambient trigger (non-mention, non-rival) ---
-  // If someone talks about MMOs, p2w, Asmongold, etc., React Lord may chime in unprompted
-  if (triggersReactLord(text) && Math.random() < 0.6) {
-    if (!isOnCooldown(userCooldowns, `react_lord_${chatId}`, 5 * 60 * 1000)) { // 5-min cooldown per chat
-      try {
-        await ctx.sendChatAction('typing');
-        const reactLordPrompt = buildAlterPrompt(SYSTEM_PROMPT, ALTER_EGOS.the_react_lord);
-        const response = await chat(
-          deepseek,
-          reactLordPrompt,
-          `You just overheard a Brother named ${username} say: "${text}" — and it TRIGGERED you. React to what they said with full React Lord energy. You were minding your own business but this topic demands your immediate commentary. This is about gaming industry stuff, MMOs, streaming, or something you have STRONG opinions about. Go off. Keep it under 1000 characters.`
-        );
-        if (response) {
-          await sendMessage(ctx, `*[The React Lord has surfaced]*\n\n${response}`, ctx.message.message_id);
-        }
-      } catch (err) {
-        log.error({ err }, 'React Lord ambient trigger error');
-      }
-      return;
-    }
-  }
-
-  // --- Ambient response: Jenkins responds to general chat ---
-  const isDesignatedChat = TELEGRAM_CHAT_ID && chatId === String(TELEGRAM_CHAT_ID);
-
-  if (isDesignatedChat) {
-    // In Jenkins' designated chat, he's more talkative
-    if (Math.random() < JENKINS_CHANNEL_RESPONSE_CHANCE) {
-      if (isOnCooldown(userCooldowns, userId, USER_COOLDOWN)) return;
-
-      try {
-        await ctx.sendChatAction('typing');
-
-        const isRival = sinDetector.rivalIds.has(userId);
-        const alterEgo = pickPersonality(userId, isRival, text);
-        const alterPrompt = buildAlterPrompt(SYSTEM_PROMPT, alterEgo);
-
-        const response = await chat(
-          deepseek,
-          alterPrompt,
-          `A Brother named ${username} has spoken in your sacred channel: "${text}". Respond naturally as Jenkins. You can be wild, funny, prophetic, or wise. React to what they said. This is YOUR channel — you are free here. Keep it relatively short.`
-        );
-
-        const prefix = personalityPrefix(alterEgo, isRival);
-        await sendMessage(ctx, prefix + response, ctx.message.message_id);
-      } catch (err) {
-        log.error({ err }, 'Ambient reply error');
-      }
-    }
-  } else {
-    // In non-designated chats, Jenkins still occasionally chimes in (15% for non-rivals)
-    if (Math.random() < NON_RIVAL_RESPONSE_CHANCE) {
-      if (isOnCooldown(userCooldowns, userId, USER_COOLDOWN)) return;
-
-      try {
-        await ctx.sendChatAction('typing');
-
-        const isRival = sinDetector.rivalIds.has(userId);
-        const alterEgo = pickPersonality(userId, isRival, text);
-        const alterPrompt = buildAlterPrompt(SYSTEM_PROMPT, alterEgo);
-
-        const response = await chat(
-          deepseek,
-          alterPrompt,
-          `You overheard a Brother named ${username} say: "${text}". You weren't directly addressed, but you have something to add — a quip, a judgment, a hot take, or a brief observation. Keep it SHORT (1-2 sentences max). Be punchy. Don't force it if the message is mundane — only respond if you genuinely have something funny/wise/dramatic to say.`
-        );
-
-        const prefix = personalityPrefix(alterEgo, isRival);
-        await sendMessage(ctx, prefix + response, ctx.message.message_id);
-      } catch (err) {
-        log.error({ err }, 'Non-designated ambient reply error');
-      }
-    }
-  }
+  // All ambient behavior removed (React Lord triggers, random responses, hot takes).
+  // Jenkins only speaks on Telegram when directly mentioned, replied to, or commanded.
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -1227,6 +1101,8 @@ bot.on('text', async (ctx) => {
 // ═══════════════════════════════════════════════════════════════
 
 function scheduleNextPreaching() {
+  // Autonomous preaching disabled — Jenkins only speaks when addressed on Telegram
+  return;
   if (!TELEGRAM_CHAT_ID) return; // Need a designated chat for preaching
 
   const delay = PREACH_INTERVAL_MIN + Math.random() * (PREACH_INTERVAL_MAX - PREACH_INTERVAL_MIN);

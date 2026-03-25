@@ -40,6 +40,8 @@ const {
   PRIVATE_LORE,
 } = require('./personality');
 
+const { initSchema: initHumorSchema, ReactionTracker, ListeningMode, HumorAdapter } = require('./humor-awareness');
+const { db: sqliteDb } = require('./db');
 const { PrunedMap } = require('./safe-write');
 const log = require('./logger').child('Bot');
 
@@ -50,6 +52,11 @@ const DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL;
 const STATIC_VIP_USER_ID = process.env.VIP_USER_ID;
 let ANNOUNCEMENT_CHANNEL_ID = process.env.ANNOUNCEMENT_CHANNEL_ID;
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
+
+// Channels where Jenkins should stay quiet (finance, trading, etc.)
+// Matches channel names containing these substrings (case-insensitive)
+const IGNORED_CHANNEL_PATTERNS = (process.env.IGNORED_CHANNELS || 'finance,trading,stocks,signals,ticker,portfolio,market')
+  .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
 // Dynamic VIP: uses .env value if set, otherwise auto-detected from sin ledger
 function getVipUserId() {
@@ -127,6 +134,13 @@ let theater = null; // Initialized after client is ready (needs client.user)
 const markov = new MarkovChain();
 log.info('Markov chain loaded');
 
+// --- Humor Awareness System (Phase 1: self-aware humor) ---
+initHumorSchema(sqliteDb);
+const reactionTracker = new ReactionTracker(sqliteDb);
+const listeningMode = new ListeningMode();
+const humorAdapter = new HumorAdapter(sqliteDb);
+log.info('Humor awareness online');
+
 // --- Mood → SFX bridge: play sounds on mood transitions ---
 mood.onTransition = (fromMood, toMood, trigger) => {
   if (!soundEffects || !voiceManager) return;
@@ -139,7 +153,7 @@ mood.onTransition = (fromMood, toMood, trigger) => {
 };
 
 // --- Helper: get mood-aware system prompt ---
-function getActivePrompt() {
+function getActivePrompt(channelId) {
   let prompt = SYSTEM_PROMPT + '\n\n' + mood.getMoodOverlay();
 
   // Inject last dream context so Jenkins can reference it naturally
@@ -148,6 +162,16 @@ function getActivePrompt() {
     const daysSince = Math.round((Date.now() - lastDream.timestamp) / 86400000);
     if (daysSince <= 3) {
       prompt += `\n\nLAST DREAM (${daysSince === 0 ? 'last night' : daysSince + ' days ago'}): "${lastDream.content.substring(0, 300)}..." — You can reference this dream naturally if it's relevant to the conversation. Don't force it.`;
+    }
+  }
+
+  // Humor awareness overlays
+  if (channelId) {
+    if (listeningMode.isListening(channelId)) {
+      prompt += listeningMode.getPromptOverlay();
+    }
+    if (humorAdapter.isOnColdStreak(channelId)) {
+      prompt += humorAdapter.getColdStreakOverlay();
     }
   }
 
@@ -577,6 +601,14 @@ client.on(Events.MessageCreate, async (message) => {
   log.debug({ user: message.author.username, preview: content.substring(0, 50), channel: message.channel.name || 'DM' }, 'Message received');
   const isMentioned = message.mentions.has(client.user);
   const isDM = !message.guild;
+
+  // --- Stay out of finance channels (unless directly @mentioned or using a command) ---
+  if (message.guild && !isMentioned && !isDM && !content.startsWith('!')) {
+    const chanName = (message.channel.name || '').toLowerCase();
+    if (IGNORED_CHANNEL_PATTERNS.some(p => chanName.includes(p))) {
+      return; // Jenkins does not belong here
+    }
+  }
 
   // --- VIP special treatment: The sacred presence (skip if command) ---
   const currentVipMsg = getVipUserId();
@@ -1053,7 +1085,7 @@ client.on(Events.MessageCreate, async (message) => {
           await message.channel.sendTyping();
           const { response, members } = await conveneCouncil(
             deepseek,
-            getActivePrompt(),
+            getActivePrompt(message.channel.id),
             question,
             message.author.displayName || message.author.username
           );
@@ -1428,10 +1460,19 @@ client.on(Events.MessageCreate, async (message) => {
       if (isOnCooldown(userCooldowns, message.author.id, USER_COOLDOWN)) return;
       await message.channel.sendTyping();
 
-      // Alter ego for rivals even in Jenkins channel
+      // Alter ego for rivals even in Jenkins channel (humor-aware selection)
       const isRivalInChannel = sinDetector.rivalIds.has(message.author.id);
-      const channelAlter = pickAlterEgoForUser(message.author.id, isRivalInChannel, content);
-      const channelPrompt = buildAlterPrompt(getActivePrompt(), channelAlter);
+      let channelAlter = pickAlterEgoForUser(message.author.id, isRivalInChannel, content);
+
+      // Humor adaptation: if on a cold streak, try a different ego
+      const egoGuidance = humorAdapter.getEgoGuidance(message.channel.id);
+      if (egoGuidance.cold && egoGuidance.avoidEgo && channelAlter.name === egoGuidance.avoidEgo) {
+        // Re-roll once to avoid the stale ego
+        channelAlter = pickAlterEgoForUser(message.author.id, isRivalInChannel, content);
+        log.info({ avoided: egoGuidance.avoidEgo, newEgo: channelAlter.name }, 'Cold streak: switched alter ego');
+      }
+
+      const channelPrompt = buildAlterPrompt(getActivePrompt(message.channel.id), channelAlter);
 
       const response = await chatWithTools(
         deepseek,
@@ -1442,7 +1483,13 @@ client.on(Events.MessageCreate, async (message) => {
       const prefix = (channelAlter.name !== 'Jenkins Prime')
         ? `*[${channelAlter.name} has surfaced]*\n\n`
         : '';
-      return message.reply(prefix + response).catch(() => {});
+      const fullResponse = prefix + response;
+      const sent = await message.reply(fullResponse).catch(() => null);
+      if (sent) {
+        reactionTracker.trackMessage(sent.id, message.channel.id, message.guild?.id, channelAlter.name, fullResponse.length);
+        listeningMode.recordResponse(message.channel.id, fullResponse.length);
+      }
+      return;
     }
     return; // 30% chance Jenkins stays silent (even gods rest)
   }
@@ -1459,10 +1506,15 @@ client.on(Events.MessageCreate, async (message) => {
         await message.channel.sendTyping();
         const response = await chatWithTools(
           deepseek,
-          getActivePrompt(),
+          getActivePrompt(message.channel.id),
           `A Brother named ${message.author.displayName || message.author.username} (userId: ${message.author.id}) has invoked your name in #${message.channel.name}. They said: "${content}". They are calling on you specifically — respond to what they said. Be yourself: funny, wise, dramatic, or helpful depending on what they need. Keep it focused and relevant to their message. 1-3 sentences.`
         );
-        return message.reply(response).catch(() => {});
+        const sent = await message.reply(response).catch(() => null);
+        if (sent) {
+          reactionTracker.trackMessage(sent.id, message.channel.id, message.guild?.id, 'Jenkins Prime', response.length);
+          listeningMode.recordResponse(message.channel.id, response.length);
+        }
+        return;
       } catch (err) {
         log.error({ err }, 'Jenkins name-invoke error');
       }
@@ -1488,7 +1540,7 @@ client.on(Events.MessageCreate, async (message) => {
     // Alter ego for rivals in direct conversation too
     const isRivalDirect = sinDetector.rivalIds.has(message.author.id);
     const directAlter = pickAlterEgoForUser(message.author.id, isRivalDirect, userMessage);
-    const directPrompt = buildAlterPrompt(getActivePrompt(), directAlter);
+    const directPrompt = buildAlterPrompt(getActivePrompt(message.channel.id), directAlter);
 
     const response = await chatWithTools(
       deepseek,
@@ -1499,7 +1551,13 @@ client.on(Events.MessageCreate, async (message) => {
     const prefix = (directAlter.name !== 'Jenkins Prime')
       ? `*[${directAlter.name} has surfaced]*\n\n`
       : '';
-    return message.reply(prefix + response).catch(() => {});
+    const fullDirect = prefix + response;
+    const sent = await message.reply(fullDirect).catch(() => null);
+    if (sent) {
+      reactionTracker.trackMessage(sent.id, message.channel.id, message.guild?.id, directAlter.name, fullDirect.length);
+      listeningMode.recordResponse(message.channel.id, fullDirect.length);
+    }
+    return;
     } catch (err) {
       log.error({ err }, 'Reply error');
       message.reply('The Architect\'s mind wanders. Speak again, Brother.').catch(() => {});
@@ -1557,6 +1615,9 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
   if (reaction.partial) await reaction.fetch().catch(() => {});
   if (reaction.message.partial) await reaction.message.fetch().catch(() => {});
 
+  // Humor awareness: track reactions on Jenkins' messages
+  reactionTracker.onReactionAdd(reaction.message.id, reaction.emoji.name);
+
   // Starboard: check for star reactions on any message
   starboard.handleReaction(reaction, user).catch(e => log.error({ err: e }, 'Starboard reaction error'));
 
@@ -1577,6 +1638,10 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
 
 client.on(Events.MessageReactionRemove, async (reaction, user) => {
   if (user.bot) return;
+
+  // Humor awareness: track reaction removals on Jenkins' messages
+  reactionTracker.onReactionRemove(reaction.message.id, reaction.emoji.name);
+
   if (reaction.message.id !== REACTION_ROLE_MESSAGE) return;
   if (reaction.partial) await reaction.fetch();
 
