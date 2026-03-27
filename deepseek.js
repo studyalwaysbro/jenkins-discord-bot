@@ -15,7 +15,6 @@ function createClient(apiKey, baseURL) {
     apiKey,
     baseURL: baseURL || 'https://api.deepseek.com',
     compatibility: 'compatible',
-    useResponsesApi: false,
   });
   // Return the provider — callers pass this to chat/chatStream
   return provider;
@@ -207,7 +206,7 @@ async function chat(client, systemPrompt, userMessage, conversationHistory) {
     messages.push({ role: 'user', content: userMessage });
 
     const result = await generateText({
-      model: client('deepseek-chat'),
+      model: client.chat('deepseek-chat'),
       system: systemPrompt,
       messages,
       temperature: 0.9,
@@ -253,7 +252,7 @@ async function chatWithTools(client, systemPrompt, userMessage, conversationHist
     messages.push({ role: 'user', content: userMessage });
 
     const result = await generateText({
-      model: client('deepseek-chat'),
+      model: client.chat('deepseek-chat'),
       system: systemPrompt,
       messages,
       tools,
@@ -310,7 +309,7 @@ async function chatStream(client, systemPrompt, userMessage, conversationHistory
 
   try {
     const result = streamText({
-      model: client('deepseek-chat'),
+      model: client.chat('deepseek-chat'),
       system: systemPrompt,
       messages,
       temperature: 0.9,
