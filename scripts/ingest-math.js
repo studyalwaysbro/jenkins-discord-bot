@@ -151,6 +151,12 @@ if (args.includes('--file')) {
     process.exit(1);
   }
   files = [filePath];
+} else if (args.includes('--all')) {
+  // All .md files in knowledge/ (excluding game-library, holy-trinity, lodge-lore which are in the FTS5 knowledge.js system)
+  const LEGACY_FILES = new Set(['game-library.md', 'holy-trinity.md', 'lodge-lore.md']);
+  files = fs.readdirSync(KNOWLEDGE_DIR)
+    .filter(f => f.endsWith('.md') && !LEGACY_FILES.has(f))
+    .map(f => path.join(KNOWLEDGE_DIR, f));
 } else {
   // Default: all math-*.md files in knowledge/
   files = fs.readdirSync(KNOWLEDGE_DIR)
