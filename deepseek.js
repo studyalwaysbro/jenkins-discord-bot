@@ -163,7 +163,7 @@ function buildTools() {
   try {
     const { search: kbSearch } = require('./knowledge');
     tools.search_knowledge = tool({
-      description: 'Search the Lodge knowledge base for game guides, lore, rules, strategy tips, or any Lodge-related information. Use when someone asks about specific games, the Codex, the Holy Trinity, Lodge customs, or needs gameplay advice.',
+      description: 'Search the Lodge knowledge base for game guides, lore, rules, strategy tips, Lodge-related information, AND mathematics. Use for: specific games, the Codex, Lodge customs, gameplay advice, AND any math question — calculus, linear algebra, differential equations, PDEs, real/complex analysis, topology, discrete math, probability, statistics, machine learning, information theory, network theory. Search for theorems, formulas, definitions, and techniques.',
       parameters: z.object({
         query: z.string().describe('Search query — game name, topic, or question keywords'),
       }),
@@ -182,6 +182,35 @@ function buildTools() {
     });
   } catch {
     // Knowledge module not loaded — skip
+  }
+
+  // Math RAG — semantic/keyword search over textbook content
+  try {
+    const mathRag = require('./math-rag');
+    const stats = mathRag.getStats();
+    if (stats.total > 0) {
+      tools.search_math = tool({
+        description: 'Search the mathematical knowledge base for theorems, proofs, formulas, definitions, and worked examples from textbooks. Covers: calculus, linear algebra, ODEs, PDEs, real analysis, complex analysis, topology, discrete math, probability, statistics, ML, information theory, network theory. Use this for detailed mathematical content beyond what search_knowledge provides.',
+        parameters: z.object({
+          query: z.string().describe('Math topic, theorem name, formula, or concept to search for'),
+        }),
+        execute: async ({ query }) => {
+          const results = mathRag.search(query, 5);
+          if (results.length === 0) return { found: false };
+          return {
+            found: true,
+            results: results.map(r => ({
+              subject: r.subject,
+              section: r.section,
+              content: r.content.substring(0, 800),
+            })),
+          };
+        },
+      });
+      log.info({ chunks: stats.total }, 'Math RAG tool registered');
+    }
+  } catch {
+    // Math RAG module not loaded — skip
   }
 
   return tools;

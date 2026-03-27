@@ -1,0 +1,31 @@
+category: mathematics
+
+## Probability Foundations
+Sample space Ω, events are subsets. Axioms: P(Ω) = 1, P(A) ≥ 0, P(A∪B) = P(A) + P(B) for disjoint. Conditional probability: P(A|B) = P(A∩B)/P(B). Bayes' theorem: P(A|B) = P(B|A)P(A)/P(B). Independence: P(A∩B) = P(A)P(B). Random variable: function X: Ω -> R. CDF: F(x) = P(X ≤ x). PMF (discrete): p(x) = P(X = x). PDF (continuous): f(x) = F'(x). Expectation: E[X] = Σ x*p(x) or ∫x*f(x)dx. Variance: Var(X) = E[(X-μ)^2] = E[X^2] - (E[X])^2. Linearity: E[aX+bY] = aE[X]+bE[Y] always. Var(X+Y) = Var(X)+Var(Y) if independent.
+
+## Key Distributions
+Bernoulli(p): X ∈ {0,1}, P(X=1) = p. Binomial(n,p): sum of n Bernoulli, P(X=k) = C(n,k)p^k(1-p)^{n-k}. Poisson(λ): P(X=k) = e^{-λ}λ^k/k!, limit of Binomial. Geometric(p): trials until first success, P(X=k) = (1-p)^{k-1}p. Normal(μ,σ^2): f(x) = (1/σ√2π)exp(-(x-μ)^2/2σ^2). Standard normal Z = (X-μ)/σ. Exponential(λ): f(x) = λe^{-λx}, memoryless. Gamma(α,β): generalizes exponential. Chi-squared(k): sum of k squared standard normals. t-distribution: Z/√(V/k) where V ~ χ^2(k), used for small sample inference.
+
+## Central Limit Theorem and Law of Large Numbers
+Weak LLN: sample mean X̄_n → μ in probability. Strong LLN: X̄_n → μ almost surely. Central limit theorem: √n(X̄_n - μ)/σ → N(0,1) in distribution, regardless of underlying distribution (with finite variance). Berry-Esseen: convergence rate O(1/√n). Multivariate CLT: √n(X̄ - μ) → N(0, Σ). Applications: confidence intervals, hypothesis testing, approximating distributions for large n. Delta method: if √n(X̄-μ) → N(0,σ^2), then √n(g(X̄)-g(μ)) → N(0, [g'(μ)]^2 σ^2).
+
+## Statistical Inference
+Point estimation: method of moments (match sample moments to theoretical), maximum likelihood (maximize L(θ) = Π f(x_i|θ)). MLE properties: consistent, asymptotically normal, efficient (achieves Cramér-Rao lower bound). Confidence intervals: X̄ ± z_{α/2} σ/√n (known σ), X̄ ± t_{α/2} s/√n (unknown σ). Hypothesis testing: null H_0 vs alternative H_1, test statistic, p-value = P(data this extreme | H_0). Type I error (false positive) = α, Type II error (false negative) = β, power = 1-β. Neyman-Pearson: likelihood ratio test is most powerful. Multiple testing: Bonferroni correction, FDR (Benjamini-Hochberg).
+
+## Stochastic Processes
+Markov chain: P(X_{n+1}|X_n,...,X_0) = P(X_{n+1}|X_n). Transition matrix P, stationary distribution π satisfying πP = π. Irreducible: all states communicate. Aperiodic: gcd of return times = 1. Ergodic theorem: time averages = space averages for irreducible aperiodic chains. Poisson process: N(t) ~ Poisson(λt), interarrival times ~ Exp(λ). Brownian motion: continuous paths, independent Gaussian increments, B(t)-B(s) ~ N(0,t-s). Martingale: E[X_{n+1}|X_n,...,X_0] = X_n (fair game). Optional stopping theorem. Itô calculus: dX = μdt + σdB, Itô's lemma for functions of Brownian motion.
+
+## Machine Learning — Fundamentals
+Supervised learning: learn f: X -> Y from labeled data. Regression (Y continuous), classification (Y discrete). Loss functions: MSE = (1/n)Σ(y_i - ŷ_i)^2, cross-entropy = -Σ y_i log(ŷ_i). Bias-variance tradeoff: E[(y-ŷ)^2] = Bias^2 + Variance + irreducible noise. Underfitting (high bias) vs overfitting (high variance). Regularization: L1 (lasso, |w|, promotes sparsity), L2 (ridge, w^2, shrinks weights). Cross-validation: k-fold splits data, train on k-1, validate on 1, average. Train/validation/test split. Feature scaling: standardization (z-score), normalization (min-max).
+
+## Machine Learning — Classical Models
+Linear regression: ŷ = Xw, closed form w = (X^TX)^{-1}X^Ty (normal equations). Logistic regression: P(y=1) = σ(w^Tx) where σ(z) = 1/(1+e^{-z}), trained via gradient descent on cross-entropy. SVM: maximize margin between classes, kernel trick for nonlinear boundaries (RBF, polynomial). Decision trees: recursive partitioning, split on feature/threshold that maximizes information gain (entropy reduction) or Gini impurity decrease. Random forests: ensemble of trees on bootstrapped samples with random feature subsets, reduces variance. Gradient boosting (XGBoost, LightGBM): sequential trees fit residuals, strong performance on tabular data. KNN: classify by majority vote of k nearest neighbors, nonparametric.
+
+## Machine Learning — Neural Networks
+Perceptron: y = σ(w^Tx + b). Multilayer: compose layers, universal approximation theorem. Activation functions: ReLU max(0,x), sigmoid 1/(1+e^{-x}), tanh, GELU, softmax for classification. Backpropagation: chain rule through computation graph, ∂L/∂w_l = ∂L/∂a_l * ∂a_l/∂z_l * ∂z_l/∂w_l. Optimizers: SGD, Adam (adaptive moments), AdamW (decoupled weight decay). Batch normalization: normalize activations, reduces internal covariate shift. Dropout: randomly zero activations during training (regularization). CNNs: convolution layers (local receptive fields, weight sharing), pooling, translation equivariance. RNNs/LSTMs: sequential data, hidden state carries memory, LSTM gates (forget, input, output) solve vanishing gradients.
+
+## Machine Learning — Transformers and Modern Architectures
+Self-attention: Attention(Q,K,V) = softmax(QK^T/√d_k)V. Multi-head attention: multiple attention heads concatenated. Transformer: encoder-decoder, self-attention + feedforward + layer norm + residual connections. Positional encoding: sinusoidal or learned. BERT: bidirectional encoder, masked language model pretraining. GPT: autoregressive decoder, next-token prediction. ViT: vision transformer, patches as tokens. Training: warmup + cosine decay learning rate schedule. Scaling laws: performance improves as power law with compute, data, and parameters.
+
+## Dimensionality Reduction
+PCA: find directions of maximum variance. Eigenvectors of covariance matrix X^TX/n. Project onto top-k eigenvectors. Explained variance ratio: λ_i / Σλ_j. SVD connection: principal components are right singular vectors. t-SNE: nonlinear, preserves local structure via conditional probabilities in high/low dimensions, minimizes KL divergence. UMAP: similar to t-SNE but preserves more global structure, faster. Autoencoders: neural network that compresses to bottleneck then reconstructs, bottleneck is learned representation. Variational autoencoders (VAE): probabilistic, encode to distribution, sample, decode.
