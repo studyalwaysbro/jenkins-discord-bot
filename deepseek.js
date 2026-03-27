@@ -15,6 +15,7 @@ function createClient(apiKey, baseURL) {
     apiKey,
     baseURL: baseURL || 'https://api.deepseek.com',
     compatibility: 'compatible',
+    useResponsesApi: false,
   });
   // Return the provider — callers pass this to chat/chatStream
   return provider;
