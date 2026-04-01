@@ -5,6 +5,7 @@ const { createOpenAI } = require('@ai-sdk/openai');
 const { generateText, streamText, tool } = require('ai');
 const { z } = require('zod');
 const log = require('./logger').child('DeepSeek');
+const { logApiCall } = require('/home/yeeterson/.api-monitor/api-logger');
 
 // ═══════════════════════════════════════════════════════════════
 // Client Factory — returns an object with provider + raw OpenAI client
@@ -241,6 +242,11 @@ async function chat(client, systemPrompt, userMessage, conversationHistory) {
       temperature: 0.9,
       maxTokens: 1000,
     });
+    logApiCall('deepseek', '/chat/completions', {
+      project: 'jenkins',
+      tokensIn: result.usage?.promptTokens || 0,
+      tokensOut: result.usage?.completionTokens || 0,
+    });
 
     const response = result.text;
     if (!response) {
@@ -288,6 +294,11 @@ async function chatWithTools(client, systemPrompt, userMessage, conversationHist
       maxSteps: 3, // Allow up to 3 tool calls per response
       temperature: 0.9,
       maxTokens: 1000,
+    });
+    logApiCall('deepseek', '/chat/completions', {
+      project: 'jenkins',
+      tokensIn: result.usage?.promptTokens || 0,
+      tokensOut: result.usage?.completionTokens || 0,
     });
 
     const response = result.text;
@@ -385,6 +396,7 @@ async function chatStream(client, systemPrompt, userMessage, conversationHistory
       if (callbacks.onSentence) callbacks.onSentence(sentenceBuffer.trim());
     }
 
+    logApiCall('deepseek', '/chat/completions', { project: 'jenkins', tokensOut: tokenCount });
     if (callbacks.onDone) callbacks.onDone(fullText, tokenCount);
 
     return fullText;
