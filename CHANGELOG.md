@@ -2,6 +2,35 @@
 
 All notable changes to Jenkins will be documented in this file.
 
+## [3.1.0] - 2026-04-01
+
+### Added
+- **Knowledge Base System**: Massive RAG-powered knowledge base across 12+ domains with 4,100+ chunks:
+  - **Game Knowledge**: Barotrauma (218 chunks), 7 Days to Die (683), Kenshi (1,519), Dominions 6 (468), Slay the Spire (561), Monster Train (503) — scraped from Fandom wikis and official manuals
+  - **General Knowledge**: mythology/philosophy, internet culture, programming/CS, fitness/life advice, movies/TV/anime (165 chunks)
+  - **Mathematical Knowledge**: calculus, linear algebra, ODEs/PDEs, real/complex analysis, topology, discrete math, probability, ML, info theory (52 chunks)
+- **Math RAG Pipeline**: SQLite-backed vector search (`math-rag.js`) with FTS5 + cosine similarity, `search_math` tool wired into DeepSeek
+- **Wiki Scrapers**: `scrape-fandom-wiki.js` (generic MediaWiki/Cargo scraper), `scrape-isaac.js` (Binding of Isaac), `ingest-math.js` with `--all` flag
+
+### Fixed
+- **Vercel AI SDK v6 Compatibility**: Fixed 404 errors caused by SDK defaulting to OpenAI Responses API (`/v1/responses`). Set `useResponsesApi: false` and switched to `provider.chat()` for DeepSeek compatibility
+
+## [3.0.0] - 2026-03-25
+
+### Added
+- **Phase 1 — Humor Awareness System**: `humor-awareness.js` with SQLite-backed reaction tracking, listening mode, cold streak detection, per-ego performance metrics
+- **Phase 2 — Context-Aware Alter Egos**: All 7 egos now have content triggers (not just React Lord)
+- **Phase 3 — User Memory**: Per-user context tracking for personalized responses
+- **Phase 4 — Humor Engine**: Dynamic comedy generation with performance feedback loop
+- **Phase 5 — Conversation Context**: Multi-turn awareness across responses
+- **Telegram Quieting**: Stripped all ambient behavior (hot takes, Stavros breaks, React Lord triggers, random responses, preaching) — Telegram Jenkins now only responds to direct mentions, replies, and commands
+- **Finance Channel Guard**: `IGNORED_CHANNEL_PATTERNS` prevents Jenkins from responding in finance-focused channels
+- **Cross-Blind Council**: Evolution report and runner script for multi-model evaluation
+
+### Changed
+- Humor-aware ego selection: cold streak detection adjusts alter ego weights dynamically
+- All response paths now integrate humor awareness context
+
 ## [2.2.0] - 2026-03-22
 
 ### Added

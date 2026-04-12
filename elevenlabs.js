@@ -6,7 +6,7 @@ const log = require('./logger').child('ElevenLabs');
 const ELEVENLABS_BASE = 'https://api.elevenlabs.io/v1';
 
 // Jenkins The Architect — Custom designed: deep prophet + raspy wizard + cult leader + dramatic narrator
-const DEFAULT_VOICE_ID = 'kspZtmdcoBwVH8S5bVE0';
+const DEFAULT_VOICE_ID = '9o53gbXFIp557AvEetw1'; // Custom voice
 
 // ═══════════════════════════════════════════════════════════════
 // Credit Tracking — The Architect monitors his divine resources
@@ -124,7 +124,7 @@ function elevenLabsTTS(apiKey, text, voiceId, settings) {
   const url = `${ELEVENLABS_BASE}/text-to-speech/${voiceId}`;
   const body = JSON.stringify({
     text,
-    model_id: 'eleven_multilingual_v2',
+    model_id: 'eleven_turbo_v2',
     voice_settings: voiceSettings,
   });
 
@@ -212,7 +212,7 @@ function elevenLabsTTSStream(apiKey, text, voiceId, settings) {
   const url = `${ELEVENLABS_BASE}/text-to-speech/${voiceId}/stream`;
   const body = JSON.stringify({
     text,
-    model_id: 'eleven_multilingual_v2',
+    model_id: 'eleven_turbo_v2',
     voice_settings: voiceSettings,
     optimize_streaming_latency: 3,
   });

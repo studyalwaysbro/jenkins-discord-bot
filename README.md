@@ -107,6 +107,22 @@ Jenkins extends his divine reach into Telegram with **full feature parity**:
 - **Jenkins Channel** — responds to 70% of messages in his designated channel with full personality
 - **Omniscient Q&A** — Jenkins answers ANY question (math, science, history, coding, etc.) in character
 
+### 📚 Knowledge Base (RAG System)
+Jenkins has a massive retrieval-augmented knowledge base with **4,100+ chunks** across 12+ domains:
+- **Game Knowledge**: Barotrauma, 7 Days to Die, Kenshi, Dominions 6, Slay the Spire, Monster Train — scraped from Fandom wikis and official manuals
+- **General Knowledge**: mythology/philosophy, internet culture, programming/CS, fitness/life advice, movies/TV/anime
+- **Mathematical Knowledge**: calculus, linear algebra, ODEs/PDEs, real/complex analysis, topology, discrete math, probability, ML, information theory
+- **Math RAG Pipeline**: SQLite-backed vector search with FTS5 + cosine similarity for precise retrieval
+- **Wiki Scrapers**: Generic Fandom wiki scraper (`scrape-fandom-wiki.js`) and specialized extractors
+
+### 🧠 Humor Awareness & Context System
+- **Reaction Tracking** — SQLite-backed tracking of how users react to different ego styles and comedy types
+- **Cold Streak Detection** — when Jenkins' humor falls flat repeatedly, he dynamically adjusts ego selection weights
+- **Per-Ego Performance** — each alter ego's hit rate is tracked for data-driven personality selection
+- **User Memory** — per-user context tracking for personalized responses across sessions
+- **Finance Channel Guard** — auto-ignores finance-focused channels to avoid off-topic disruptions
+- **Telegram Quieting** — Telegram bot stripped of all ambient behavior; responds only to direct mentions, replies, and commands
+
 ---
 
 ## Architecture
@@ -141,7 +157,7 @@ Jenkins extends his divine reach into Telegram with **full feature parity**:
 | `sins.js` | Sin detection engine — regex pattern matching, severity classification, AI callout generation with alter ego prompt override, persistent ledger, escalation system |
 | `alter-egos.js` | Multiple Personality Disorder system — 7 alter ego definitions with personality prompts, voice configs, weighted random selection, content-based trigger detection, anti-repetition |
 | `hot-takes.js` | Activity-triggered comedy — chat activity monitoring, political pundit hot take generation with comedy undercut, random comedy break generation |
-| `telegram-bot.js` | Telegram integration — all 7 alter egos, sin detection, hot takes, autonomous preaching, slash commands via Telegraf |
+| `telegram-bot.js` | Telegram integration — direct mentions/replies/commands only (ambient behavior removed), slash commands via Telegraf |
 | `logger.js` | Pino structured logging — root logger with `.child('Module')` shorthand, JSON in prod, pino-pretty in dev |
 | `safe-write.js` | Atomic JSON persistence — temp-file-then-rename, backup recovery, `PrunedMap` for auto-pruning cooldown Maps |
 | `mood.js` | 4-axis emotional state (wrath, joy, energy, chaos) — affects all AI responses, sin sensitivity, economy, alter ego weights |
@@ -152,6 +168,13 @@ Jenkins extends his divine reach into Telegram with **full feature parity**:
 | `achievements.js` | Roguelike-inspired progression — 29 achievements tied to chat, economy, gambling, dungeons |
 | `game-night.js` | Scheduled gaming events with real time parsing, auto-reminders, RSVP system |
 | `latency-monitor.js` | Voice pipeline instrumentation — per-stage timing, session P95 averages |
+| `knowledge.js` | RAG knowledge retrieval — 4,100+ chunks across 12 domains, FTS5 search |
+| `math-rag.js` | SQLite-backed math vector search with cosine similarity |
+| `humor-awareness.js` | Reaction tracking, cold streak detection, per-ego performance metrics |
+| `council.js` | Cross-blind council evaluation and evolution reports |
+| `db.js` | SQLite database layer for persistent state (humor, knowledge, user memory) |
+| `charts.js` | Chart generation for dashboard and analytics |
+| `dashboard.js` | Server dashboard with analytics and stats |
 
 ---
 

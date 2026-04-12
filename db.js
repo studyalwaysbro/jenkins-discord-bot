@@ -146,7 +146,7 @@ function close() {
 }
 
 process.on('exit', close);
-process.on('SIGINT', close);
-process.on('SIGTERM', close);
+process.on('SIGINT', () => { close(); process.exit(0); });
+process.on('SIGTERM', () => { close(); process.exit(0); });
 
 module.exports = { db, dbRead, dbWrite, DB_PATH };

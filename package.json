@@ -36,7 +36,8 @@
   "type": "commonjs",
   "dependencies": {
     "@ai-sdk/openai": "^3.0.47",
-    "@discordjs/voice": "^0.19.1",
+    "@discordjs/opus": "^0.10.0",
+    "@discordjs/voice": "^0.19.2",
     "@napi-rs/canvas": "^0.1.97",
     "ai": "^6.0.134",
     "better-sqlite3": "^12.8.0",

@@ -1,0 +1,14 @@
+project: jenkins
+dormant_after_days: 30
+sources:
+  - path: package.json
+    required: true
+  - path: bot.js
+    required: false
+  - path: telegram-bot.js
+    required: false
+derived:
+  - path: README.md
+    required: true
+  - path: CHANGELOG.md
+    required: true

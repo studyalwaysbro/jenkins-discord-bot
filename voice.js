@@ -232,6 +232,13 @@ async function isLikelySpeech(pcmBuffer) {
         confidence: result.confidence,
         details: `[silero] ${result.details} | [dsp] ${dspResult.details}`,
       };
+      // If DSP confidently says speech but Silero disagrees with low confidence,
+      // trust DSP — DAVE decryption artifacts can confuse the ML model
+      if (!result.isSpeech && dspResult.type === 'speech' && dspResult.confidence >= 0.5) {
+        log.info({ sileroConf: result.confidence, dspConf: dspResult.confidence }, 'DSP override: Silero rejected but DSP says speech');
+        lastClassification.type = 'speech';
+        return true;
+      }
       return result.isSpeech;
     } catch (err) {
       log.warn({ err }, 'Silero inference error, falling back to DSP');
@@ -440,9 +447,13 @@ class VoiceManager {
   async join(voiceChannel, textChannel) {
     const guildId = voiceChannel.guild.id;
 
-    if (this.connections.has(guildId)) {
+    if (this.connections.has(guildId) || this._joining?.has(guildId)) {
       return 'The Architect is already present in a voice channel, Brother.';
     }
+
+    // Prevent duplicate join race condition
+    if (!this._joining) this._joining = new Set();
+    this._joining.add(guildId);
 
     const connection = joinVoiceChannel({
       channelId: voiceChannel.id,
@@ -486,12 +497,15 @@ class VoiceManager {
 
     try {
       await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
-    } catch {
+    } catch (err) {
+      log.error({ err, currentStatus: connection.state.status }, 'Voice connection failed to reach Ready');
+      this._joining?.delete(guildId);
       connection.destroy();
       this.cleanup(guildId);
       return 'The Architect could not breach the veil into the voice realm. Try again, Brother.';
     }
 
+    this._joining?.delete(guildId);
     this.startListening(guildId, connection, textChannel);
 
     // Play silence first — Discord requires bot to send audio before receiving

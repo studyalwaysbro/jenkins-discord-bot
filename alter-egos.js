@@ -14,7 +14,7 @@ const ALTER_EGOS = {
     description: 'The default Architect — grandiose, prophetic, wrathful.',
     weight: 30,
     promptPrefix: '',
-    voice: { type: 'elevenlabs', voiceId: 'kspZtmdcoBwVH8S5bVE0' },
+    voice: { type: 'elevenlabs', voiceId: '9o53gbXFIp557AvEetw1' }, // Custom voice
     // No triggers — Prime is the default when nothing specific matches
     triggers: [],
   },
